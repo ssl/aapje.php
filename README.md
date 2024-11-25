@@ -36,9 +36,12 @@ require 'aapje.php';
 Make sure all requests to your website (or folder) using aapje.php are passed through your routing file:
 
 ```
+# Apache .htaccess example
 RewriteEngine On
-RewriteRule ^(.*)$ example.php [L]
+RewriteRule ^(.*)$ index.php [L]
 ```
+
+Or simply fork/clone this repository, sync to a webhost, and directly start coding your API inside the `index.php` file
 
 ## Basic Usage
 
@@ -127,7 +130,7 @@ aapje::route('POST', '/user', function () {
 aapje::run();
 ```
 
-more detailed examples can be found in the [example.php](example.php) file of this repo.
+more detailed examples can be found in the [examples.php](examples.php) file of this repo.
 
 ## Database Examples
 
