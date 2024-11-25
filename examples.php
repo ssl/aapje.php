@@ -1,4 +1,10 @@
 <?php
+/**
+ * aapje.php examples
+ * 
+ * This is an example file demonstrating how you can use aapje.
+ *
+ */
 require 'aapje.php';
 
 // Database Configuration
