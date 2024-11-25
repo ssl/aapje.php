@@ -277,9 +277,13 @@ class Request {
         return $_FILES;
     }
 
-    public function input() {
+    public function input($decode = true) {
         $input = file_get_contents('php://input');
-        return json_decode($input, true);
+        if ($decode) {
+            return json_decode($input, true);
+        } else {
+            return $input;
+        }
     }
 
     public function getParam(string $key): ?string {
