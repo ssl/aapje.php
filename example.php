@@ -18,13 +18,13 @@ aapje::route('GET', '/', function () {
 
 // Get all users
 aapje::route('GET', '/users', function () {
-    $users = aapje::select('users', '*');
+    $users = aapje::selectAll('users', '*');
     aapje::response()->echo($users);
 });
 
 // Get users' emails
 aapje::route('GET', '/users/mails', function () {
-    $users = aapje::select('users', ['id', 'email']);
+    $users = aapje::selectAll('users', ['id', 'email']);
     aapje::response()->echo($users);
 });
 
@@ -36,7 +36,7 @@ aapje::route('GET', '/user/@id', function ($id) {
 
 // Get last 5 users ordered by ID
 aapje::route('GET', '/users/limited', function () {
-    $users = aapje::select('users', '*', [], ['limit' => 5, 'orderBy' => 'id', 'sort' => 'DESC']);
+    $users = aapje::selectAll('users', '*', [], ['limit' => 5, 'orderBy' => 'id', 'sort' => 'DESC']);
     aapje::response()->echo($users);
 });
 
@@ -114,7 +114,7 @@ aapje::route('POST', '/users/search', function () {
         aapje::response()->statusCode(400)->echo(['error' => 'Please provide search criteria']);
     }
 
-    $results = aapje::select('users', ['id'], $conditions);
+    $results = aapje::selectAll('users', ['id'], $conditions);
     aapje::response()->echo($results);
 });
 
