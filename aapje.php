@@ -163,6 +163,49 @@ class aapje {
             'table' => $table,
             'orderBy' => $options['orderBy'] ?? null,
             'sort' => $options['sort'] ?? null,
+        ]);
+        $query = "SELECT $cols FROM $table";
+
+        $params = [];
+        if (!empty($conditions)) {
+            $wheres = [];
+            foreach ($conditions as $key => $value) {
+                self::checkQuery(['columns' => $key]);
+                $wheres[] = "$key = ?";
+                $params[] = $value;
+            }
+            $whereClause = implode(' AND ', $wheres);
+            $query .= " WHERE $whereClause";
+        }
+
+        if (isset($options['orderBy'])) {
+            $orderBy = $options['orderBy'];
+            $query .= " ORDER BY $orderBy";
+            if (isset($options['sort'])) {
+                $query .= " " . strtoupper($options['sort']);
+            }
+        }
+
+        $query .= " LIMIT 1";
+
+        $stmt = self::query($query, $params);
+        return $stmt->fetch();
+    }
+
+    public static function selectAll(string $table, $columns = '*', array $conditions = [], array $options = []) {
+        if ($columns !== '*') {
+            if (!is_array($columns)) {
+                throw new Exception("Columns must be '*' or an array of columns");
+            }
+            self::checkQuery(['table' => $table, 'columns' => $columns]);
+            $cols = implode(',', array_map(function($col) { return "$col"; }, $columns));
+        } else {
+            $cols = '*';
+        }
+        self::checkQuery([
+            'table' => $table,
+            'orderBy' => $options['orderBy'] ?? null,
+            'sort' => $options['sort'] ?? null,
             'limit' => $options['limit'] ?? null,
         ]);
         $query = "SELECT $cols FROM $table";
@@ -180,7 +223,7 @@ class aapje {
         }
 
         if (isset($options['orderBy'])) {
-            $orderBy = "" . $options['orderBy'] . "";
+            $orderBy = $options['orderBy'];
             $query .= " ORDER BY $orderBy";
             if (isset($options['sort'])) {
                 $query .= " " . strtoupper($options['sort']);
@@ -299,11 +342,11 @@ class Response {
         return $this;
     }
 
-    public function echo($content) {
+    public function echo($content, $json=true) {
         foreach ($this->headers as $key => $value) {
             header("$key: $value");
         }
-        if (is_string($content)) {
+        if (is_string($content) && $json) {
             $content = ['echo' => $content];
         }
         echo is_array($content) ? json_encode($content) : $content;
