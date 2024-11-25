@@ -33,7 +33,7 @@ Since aapje.php is a single file, you can simply include it in your project:
 require 'aapje.php';
 ````
 
-Make sure all requests to your website (or folder) using aapje.php are passed through your routing file
+Make sure all requests to your website (or folder) using aapje.php are passed through your routing file:
 
 ```
 RewriteEngine On
