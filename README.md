@@ -90,9 +90,9 @@ require 'aapje.php';
 // Database Configuration
 aapje::setDbConfig([
     'host' => 'localhost',
-    'dbname' => 'test_db',
-    'user' => 'root',
-    'password' => '',
+    'dbname' => 'your_database',
+    'user' => 'your_username',
+    'password' => 'your_password',
 ]);
 
 // Routes
@@ -101,7 +101,6 @@ aapje::route('GET', '/', function () {
 });
 
 aapje::route('GET', '/user/@id', function ($id) {
-    // Fetch user from database
     $user = aapje::select('users', '*', ['id' => $id]);
     if ($user) {
         aapje::response()->echo($user);
@@ -145,6 +144,18 @@ aapje::setDbConfig([
 ]);
 ```
 
+Or, using `.env` file:
+
+```php
+$config = parse_ini_file(__DIR__ . '/.env');
+aapje::setDbConfig([
+    'host' => $config['dbhost'],
+    'dbname' => $config['dbname'],
+    'user' => $config['dbuser'],
+    'password' => $config['dbpassword'],
+]);
+```
+
 ### Performing CRUD Operations
 
 Aapje provides simple methods for database operations: `insert`, `select`, `update`, and `delete`. All these methods use prepared statements to prevent SQL injection and ensure security.
@@ -169,7 +180,36 @@ aapje::response()->echo(['created_user_id' => $id]);
 #### Select Data
 
 ```php
-$users = aapje::select(
+$user = aapje::select(
+    'users',                // Table name
+    ['id', 'name', 'email'],// Columns to select (or '*' for all columns)
+    ['status' => 'active'], // Conditions (WHERE clause)
+    [
+        'orderBy' => 'id',  // Column to order by
+        'sort'    => 'DESC',// Sort direction ('ASC' or 'DESC')
+    ]
+);
+aapje::response()->echo($user);
+```
+
+- **Explanation**:
+  - `select($table, $columns = '*', $conditions = [], $options = [])` retrieves single record from the specified table.
+    - `$table`: The name of the table.
+    - `$columns`: An array of columns to select, or '\*' to select all columns.
+    - `$conditions`: An associative array of conditions for the WHERE clause.
+    - `$options`: An associative array of options like 'orderBy', 'sort', and 'limit'.
+
+- **Options**:
+  - **Conditions (WHERE clause)**:
+    - Provide conditions as an associative array. For example, `['status' => 'active', 'age' => 30]` translates to `WHERE status = 'active' AND age = 30`.
+  - **Ordering**:
+    - `'orderBy'`: Specify the column to order by.
+    - `'sort'`: Specify the sort direction, either `'ASC'` (ascending) or `'DESC'` (descending).
+
+#### Select All Data
+
+```php
+$users = aapje::selectAll(
     'users',                // Table name
     ['id', 'name', 'email'],// Columns to select (or '*' for all columns)
     ['status' => 'active'], // Conditions (WHERE clause)
@@ -183,7 +223,7 @@ aapje::response()->echo($users);
 ```
 
 - **Explanation**:
-  - `select($table, $columns = '*', $conditions = [], $options = [])` retrieves records from the specified table.
+  - `selectAll($table, $columns = '*', $conditions = [], $options = [])` retrieves all records from the specified table.
     - `$table`: The name of the table.
     - `$columns`: An array of columns to select, or '\*' to select all columns.
     - `$conditions`: An associative array of conditions for the WHERE clause.
@@ -292,7 +332,7 @@ $results = aapje::select(
 **Example 1: Select specific columns with conditions**
 
 ```php
-$users = aapje::select(
+$users = aapje::selectAll(
     'users',
     ['id', 'name', 'email'],
     ['status' => 'active']
@@ -304,7 +344,7 @@ $users = aapje::select(
 **Example 2: Select all columns with ordering and limit**
 
 ```php
-$users = aapje::select(
+$users = aapje::selectAll(
     'users',
     '*',
     [],
@@ -387,7 +427,25 @@ $users = $stmt->fetchAll();
 
 ### `aapje::select($table, $columns = '*', $conditions = [], $options = [])`
 
-- **Description**: Retrieves records from a table.
+- **Description**: Retrieves a single record from a table.
+- **Parameters**:
+  - `$table` (string): The table name.
+  - `$columns` (string|array): Columns to select ('\*' or an array of column names).
+  - `$conditions` (array): Associative array of conditions for the WHERE clause.
+  - `$options` (array): Additional options ('orderBy', 'sort').
+- **Returns**: An array of the single record.
+- **Options Explained**:
+  - **'orderBy'** (string): Column name to order the results by.
+  - **'sort'** (string): Sort direction, either 'ASC' or 'DESC'.
+- **Example**:
+
+  ```php
+  $user = aapje::select('users', '*', ['status' => 'active'], ['orderBy' => 'id', 'sort' => 'DESC']);
+  ```
+
+### `aapje::selectAll($table, $columns = '*', $conditions = [], $options = [])`
+
+- **Description**: Retrieves all records from a table.
 - **Parameters**:
   - `$table` (string): The table name.
   - `$columns` (string|array): Columns to select ('\*' or an array of column names).
@@ -401,7 +459,7 @@ $users = $stmt->fetchAll();
 - **Example**:
 
   ```php
-  $users = aapje::select('users', '*', ['status' => 'active'], ['limit' => 10, 'orderBy' => 'id', 'sort' => 'DESC']);
+  $users = aapje::selectAll('users', '*', ['status' => 'active'], ['limit' => 10, 'orderBy' => 'id', 'sort' => 'DESC']);
   ```
 
 ### `aapje::update($table, $data, $conditions = [])`
