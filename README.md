@@ -147,7 +147,7 @@ aapje::setDbConfig([
 Or, using `.env` file:
 
 ```php
-$config = parse_ini_file(__DIR__ . '/.env');
+$config = parse_ini_file('.env');
 aapje::setDbConfig([
     'host' => $config['dbhost'],
     'dbname' => $config['dbname'],
@@ -158,7 +158,7 @@ aapje::setDbConfig([
 
 ### Performing CRUD Operations
 
-Aapje provides simple methods for database operations: `insert`, `select`, `update`, and `delete`. All these methods use prepared statements to prevent SQL injection and ensure security.
+aapje.php provides simple methods for database operations: `insert`, `select`, `update`, and `delete`. All these methods use prepared statements to prevent SQL injection and ensure security.
 
 #### Insert Data
 
@@ -591,9 +591,11 @@ Access the request object using `aapje::request()`.
   $files = aapje::request()->files();
   ```
 
-#### `request()->input()`
+#### `request()->input($decode = true)`
 
 - **Description**: Retrieves the input data from the request body. Automatically decodes JSON input.
+- **Parameters**:
+  - `$decode` (boolean): If the content should be json decoded.
 - **Returns**: The decoded input data.
 - **Example**:
 
@@ -738,15 +740,20 @@ Access the response object using `aapje::response()`.
   aapje::response()->statusCode(404);
   ```
 
-#### `response()->echo($content)`
+#### `response()->echo($content, $json=true)`
 
 - **Description**: Sends the response to the client.
 - **Parameters**:
-  - `$content` (mixed): The content to send. If it's an array, it will be JSON-encoded.
+  - `$content` (mixed): The content to send. If it's an array and `$json` is true, it will be JSON-encoded.
+  - `$json` (boolean): If content should be json encoded or not.
 - **Example**:
 
   ```php
   aapje::response()->echo(['message' => 'Success']);
+  ```
+
+    ```php
+  aapje::response()->echo($file, false);
   ```
 
 ### Database Functions
@@ -836,7 +843,7 @@ Access the response object using `aapje::response()`.
 
 ## Error Handling
 
-Aapje handles exceptions thrown within routes and returns an HTTP 418 status code with an error message.
+aapje.php handles exceptions thrown within routes and returns an HTTP 418 status code with an error message.
 
 ```php
 try {
