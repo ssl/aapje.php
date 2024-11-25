@@ -197,7 +197,7 @@ aapje::response()->echo($user);
     - `$table`: The name of the table.
     - `$columns`: An array of columns to select, or '\*' to select all columns.
     - `$conditions`: An associative array of conditions for the WHERE clause.
-    - `$options`: An associative array of options like 'orderBy', 'sort', and 'limit'.
+    - `$options`: An associative array of options like 'orderBy' and 'sort'.
 
 - **Options**:
   - **Conditions (WHERE clause)**:
