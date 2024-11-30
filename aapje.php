@@ -5,7 +5,7 @@
  * A lightweight, single-file PHP framework for building simple APIs.
  * 
  * https://github.com/ssl/aapje.php
- * Version: 0.1
+ * Version: 0.2
  * License: MIT
  * 
  * The MIT License (MIT)
@@ -33,13 +33,45 @@
  */
 
 class aapje {
-    public static $version = '0.1';
+    public static $version = '0.2';
     private static $routes = [];
-    private static $dbConfig = [];
-    private static $pdo = null;
+    private static $middleware = [];
+    private static $config = [
+        'database' => [
+            'host' => '',
+            'dbname' => '',
+            'user' => '',
+            'password' => ''
+        ],
+        'cors' => [
+            'enabled' => false,
+            'origins' => ['*'],
+            'methods' => ['*'],
+            'headers' => ['*'],
+            'credentials' => false,
+        ],
+        'default_headers' => []
+    ];
     private static $request = null;
     private static $response = null;
+    private static $pdo = null;
 
+    /**
+     * Register a middleware function.
+     *
+     * @param callable $callback Middleware function accepting ($request, $response)
+     */
+    public static function middleware(callable $callback) {
+        self::$middleware[] = $callback;
+    }
+
+    /**
+     * Define a route with a specific HTTP method or all methods using '*'.
+     *
+     * @param string $method  HTTP method (e.g., 'GET', 'POST', '*')
+     * @param string $pattern URL pattern with optional parameters (e.g., '/user/@id')
+     * @param callable $callback Function to execute when the route matches
+     */
     public static function route(string $method, string $pattern, callable $callback) {
         self::$routes[] = [
             'method' => strtoupper($method),
@@ -48,6 +80,11 @@ class aapje {
         ];
     }
 
+    /**
+     * Access the request object.
+     *
+     * @return Request
+     */
     public static function request() {
         if (self::$request === null) {
             self::$request = new Request();
@@ -55,20 +92,74 @@ class aapje {
         return self::$request;
     }
 
+    /**
+     * Access the response object.
+     *
+     * @return Response
+     */
     public static function response() {
         if (self::$response === null) {
             self::$response = new Response();
+            // Apply default headers if any
+            foreach (self::$config['default_headers'] as $key => $value) {
+                self::$response->header($key, $value);
+            }
         }
         return self::$response;
     }
 
+    /**
+     * Set global configuration options.
+     *
+     * @param array $config Configuration array
+     */
+    public static function setConfig(array $config) {
+        foreach ($config as $key => $value) {
+            // CORS Configuration
+            if ($key === 'cors' && is_array($value)) {
+                self::$config['cors'] = array_merge(self::$config['cors'], $value);
+            }
+
+            // Database Configuration
+            if ($key === 'database' && is_array($value)) {
+                if (!empty($value['host'])) {
+                    self::$config['database'] = array_merge(self::$config['database'], $value);
+                }
+            }
+
+            // Default Headers Configuration
+            if ($key === 'default_headers' && is_array($value)) {
+                self::$config['default_headers'] = array_merge(self::$config['default_headers'], $value);
+                if (self::$response !== null) {
+                    foreach ($value as $headerKey => $headerValue) {
+                        self::$response->header($headerKey, $headerValue);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Start processing the incoming request.
+     */
     public static function run() {
         $requestMethod = $_SERVER['REQUEST_METHOD'];
         $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
 
         try {
+            // Execute Middleware
+            foreach (self::$middleware as $middleware) {
+                $middleware(self::request(), self::response());
+            }
+
+            // Handle CORS if enabled
+            if (self::$config['cors']['enabled']) {
+                self::handleCORS(self::request(), self::response());
+            }
+
+            $routeFound = false;
             foreach (self::$routes as $route) {
-                if ($route['method'] === $requestMethod) {
+                if ($route['method'] === '*' || $route['method'] === strtoupper($requestMethod)) {
                     $pattern = preg_replace('/@([\w]+)/', '(?P<$1>[^/]+)', $route['pattern']);
                     $pattern = '#^' . $pattern . '$#';
                     if (preg_match($pattern, $requestUri, $matches)) {
@@ -76,32 +167,75 @@ class aapje {
                         call_user_func_array($route['callback'], $params);
                         return;
                     }
+                    $routeFound = true;
                 }
             }
-            self::response()->statusCode(404)->echo(['error' => 'Not Found']);
+            if ($routeFound) {
+                self::response()->statusCode(405)->echo(['error' => 'Method Not Allowed']);
+            } else {
+                self::response()->statusCode(404)->echo(['error' => 'Not Found']);
+            }
         } catch (Exception $e) {
-            self::response()->statusCode(418)->echo(['error' => $e->getMessage()]);
+            self::response()->statusCode(500)->echo(['error' => $e->getMessage()]);
         }
     }
 
-    public static function setDbConfig(array $config) {
-        self::$dbConfig = $config;
+    /**
+     * Handle CORS settings.
+     *
+     * @param Request $request
+     * @param Response $response
+     */
+    private static function handleCORS($request, $response) {
+        $corsConfig = self::$config['cors'];
+
+        // Determine allowed origins
+        $allowedOrigins = $corsConfig['origins'];
+        $origin = $request->header('Origin');
+
+        if (in_array('*', $allowedOrigins)) {
+            $response->header('Access-Control-Allow-Origin', '*');
+        } elseif ($origin && in_array($origin, $allowedOrigins)) {
+            $response->header('Access-Control-Allow-Origin', $origin);
+        }
+
+        // Set other CORS headers
+        $response->header('Access-Control-Allow-Methods', implode(', ', $corsConfig['methods']));
+        $response->header('Access-Control-Allow-Headers', implode(', ', $corsConfig['headers']));
+        if ($corsConfig['credentials']) {
+            $response->header('Access-Control-Allow-Credentials', 'true');
+        }
+
+        // Handle preflight OPTIONS request
+        if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+            $response->statusCode(204)->echo(null, false);
+        }
     }
 
+    /**
+     * Establish a database connection using PDO.
+     */
     private static function connectDb() {
         if (self::$pdo === null) {
             $dsn = sprintf(
                 "mysql:host=%s;dbname=%s;charset=utf8mb4",
-                self::$dbConfig['host'],
-                self::$dbConfig['dbname']
+                self::$config['database']['host'],
+                self::$config['database']['dbname']
             );
-            self::$pdo = new PDO($dsn, self::$dbConfig['user'], self::$dbConfig['password'], [
+            self::$pdo = new PDO($dsn, self::$config['database']['user'], self::$config['database']['password'], [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
             ]);
         }
     }
 
+    /**
+     * Execute a raw SQL query with optional parameters.
+     *
+     * @param string $query  SQL query with placeholders
+     * @param array $params  Parameters to bind to the query
+     * @return PDOStatement
+     */
     public static function query(string $query, array $params = []) {
         self::connectDb();
         $stmt = self::$pdo->prepare($query);
@@ -109,6 +243,12 @@ class aapje {
         return $stmt;
     }
 
+    /**
+     * Validate query options to prevent SQL injection via identifiers.
+     *
+     * @param array $options Query options (table, columns, orderBy, limit, sort)
+     * @throws Exception if validation fails
+     */
     private static function checkQuery(array $options) {
         foreach (['table', 'columns', 'orderBy'] as $key) {
             if (isset($options[$key])) {
@@ -131,6 +271,14 @@ class aapje {
         }
     }
 
+    /**
+     * Insert a new record into a table.
+     *
+     * @param string $table Table name
+     * @param array $data   Associative array of column-value pairs
+     * @return string      Last inserted ID
+     * @throws Exception   If query fails
+     */
     public static function insert(string $table, array $data) {
         self::checkQuery(['table' => $table, 'columns' => array_keys($data)]);
         $keys = implode(',', array_map(function($key) { return "$key"; }, array_keys($data)));
@@ -140,6 +288,14 @@ class aapje {
         return self::$pdo->lastInsertId();
     }
 
+    /**
+     * Update existing records in a table.
+     *
+     * @param string $table      Table name
+     * @param array $data        Associative array of column-value pairs to update
+     * @param array $conditions  Associative array of conditions for the WHERE clause
+     * @throws Exception         If query fails
+     */
     public static function update(string $table, array $data, array $conditions = []) {
         self::checkQuery(['table' => $table, 'columns' => array_keys($data)]);
         $set = implode(',', array_map(function($key) { return "$key = ?"; }, array_keys($data)));
@@ -162,6 +318,13 @@ class aapje {
         self::query($query, $params);
     }
 
+    /**
+     * Delete records from a table.
+     *
+     * @param string $table      Table name
+     * @param array $conditions  Associative array of conditions for the WHERE clause
+     * @throws Exception         If query fails
+     */
     public static function delete(string $table, array $conditions = []) {
         self::checkQuery(['table' => $table]);
         $query = "DELETE FROM $table";
@@ -181,6 +344,16 @@ class aapje {
         self::query($query, $params);
     }
 
+    /**
+     * Select a single record from a table.
+     *
+     * @param string       $table      Table name
+     * @param string|array $columns    Columns to select ('*' or array of column names)
+     * @param array        $conditions Associative array of conditions for the WHERE clause
+     * @param array        $options    Additional options ('orderBy', 'sort')
+     * @return array|false             Single record as an associative array or false if not found
+     * @throws Exception               If query fails
+     */
     public static function select(string $table, $columns = '*', array $conditions = [], array $options = []) {
         if ($columns !== '*') {
             if (!is_array($columns)) {
@@ -224,6 +397,16 @@ class aapje {
         return $stmt->fetch();
     }
 
+    /**
+     * Select multiple records from a table.
+     *
+     * @param string       $table      Table name
+     * @param string|array $columns    Columns to select ('*' or array of column names)
+     * @param array        $conditions Associative array of conditions for the WHERE clause
+     * @param array        $options    Additional options ('orderBy', 'sort', 'limit')
+     * @return array                   Array of records
+     * @throws Exception               If query fails
+     */
     public static function selectAll(string $table, $columns = '*', array $conditions = [], array $options = []) {
         if ($columns !== '*') {
             if (!is_array($columns)) {
@@ -271,13 +454,63 @@ class aapje {
     }
 }
 
-// Request class
+/**
+ * Helpers Class
+ * 
+ * Provides utility functions for common tasks.
+ */
+class Helpers {
+    /**
+     * Escape HTML special characters.
+     *
+     * @param string $string The string to escape.
+     * @return string        The escaped string.
+     */
+    public static function esc(string $string): string {
+        return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+    }
+
+    /**
+     * Get the contents of a file.
+     * 
+     * @param string $file Path to the file.
+     * @return string      The file contents.
+     */
+    public static function getFile(string $file): string {
+        return file_get_contents($file);
+    }
+
+    /**
+     * Put new content into a file.
+     * @param string $file      Path to the file.
+     * @param string $content  The new content.
+     * @return void
+     */
+    public static function putFile(string $file, string $content): void {
+        file_put_contents($file, $content);
+    }
+}
+
+/**
+ * Request Class
+ */
 class Request {
+    /**
+     * Retrieve a specific HTTP request header.
+     *
+     * @param string $key Header name
+     * @return string|null
+     */
     public function header(string $key): ?string {
         $header = 'HTTP_' . strtoupper(str_replace('-', '_', $key));
         return $_SERVER[$header] ?? null;
     }
 
+    /**
+     * Retrieve all HTTP request headers.
+     *
+     * @return array
+     */
     public function headers(): array {
         $headers = [];
         foreach ($_SERVER as $key => $value) {
@@ -293,76 +526,166 @@ class Request {
         return $headers;
     }
 
+    /**
+     * Retrieve a specific cookie value.
+     *
+     * @param string $key Cookie name
+     * @return string|null
+     */
     public function cookie(string $key): ?string {
         return $_COOKIE[$key] ?? null;
     }
 
+    /**
+     * Retrieve all cookies.
+     *
+     * @return array
+     */
     public function cookies(): array {
         return $_COOKIE;
     }
 
+    /**
+     * Retrieve information about an uploaded file.
+     *
+     * @param string $key File input name
+     * @return array|null
+     */
     public function file(string $key) {
         return $_FILES[$key] ?? null;
     }
 
+    /**
+     * Retrieve all uploaded files.
+     *
+     * @return array
+     */
     public function files(): array {
         return $_FILES;
     }
 
-    public function input($decode = true) {
+    /**
+     * Retrieve and decode JSON input from the request body.
+     *
+     * @param bool $decode Whether to decode JSON. If false, returns raw input.
+     * @param bool $associative Whether to return an associative array or object
+     * @return array|string|null
+     */
+    public function input(bool $decode = true, $associative = true) {
         $input = file_get_contents('php://input');
         if ($decode) {
-            return json_decode($input, true);
+            return json_decode(json: $input, associative: $associative);
         } else {
             return $input;
         }
     }
 
+    /**
+     * Retrieve a specific GET parameter.
+     *
+     * @param string $key Parameter name
+     * @return string|null
+     */
     public function getParam(string $key): ?string {
         return $_GET[$key] ?? null;
     }
 
+    /**
+     * Retrieve all GET parameters.
+     *
+     * @return array
+     */
     public function getParams(): array {
         return $_GET;
     }
 
+    /**
+     * Retrieve a specific POST parameter.
+     *
+     * @param string $key Parameter name
+     * @return string|null
+     */
     public function postParam(string $key): ?string {
         return $_POST[$key] ?? null;
     }
 
+    /**
+     * Retrieve all POST parameters.
+     *
+     * @return array
+     */
     public function postParams(): array {
         return $_POST;
     }
 
+    /**
+     * Retrieve the client's IP address.
+     *
+     * @return string
+     */
     public function ip(): string {
         return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
     }
 
+    /**
+     * Retrieve the client's User-Agent string.
+     *
+     * @return string|null
+     */
     public function userAgent(): ?string {
         return $_SERVER['HTTP_USER_AGENT'] ?? null;
     }
 }
 
-// Response class
+/**
+ * Response Class
+ */
 class Response {
     private $headers = ['Content-Type' => 'application/json'];
     private $statusCode = 200;
 
+    /**
+     * Set a single HTTP response header.
+     *
+     * @param string $key Header name
+     * @param string $value Header value
+     * @return self
+     */
     public function header(string $key, string $value): self {
         $this->headers[$key] = $value;
         return $this;
     }
 
+    /**
+     * Set multiple HTTP response headers.
+     *
+     * @param array $headers Associative array of headers
+     * @return self
+     */
     public function headers(array $headers): self {
         $this->headers = array_merge($this->headers, $headers);
         return $this;
     }
 
+    /**
+     * Set a cookie.
+     *
+     * @param string $name Cookie name
+     * @param string $value Cookie value
+     * @param array $options Additional options (e.g., 'expires', 'path')
+     * @return self
+     */
     public function cookie(string $name, string $value, array $options = []): self {
         setcookie($name, $value, $options);
         return $this;
     }
 
+    /**
+     * Set multiple cookies.
+     *
+     * @param array $cookies Associative array of cookies
+     * @return self
+     */
     public function cookies(array $cookies): self {
         foreach ($cookies as $name => $data) {
             $value = $data['value'] ?? '';
@@ -372,13 +695,25 @@ class Response {
         return $this;
     }
 
+    /**
+     * Set the HTTP status code.
+     *
+     * @param int $code HTTP status code
+     * @return self
+     */
     public function statusCode(int $code): self {
         $this->statusCode = $code;
         http_response_code($code);
         return $this;
     }
 
-    public function echo($content, $json=true) {
+    /**
+     * Send the response to the client.
+     *
+     * @param mixed $content Content to send (array or string)
+     * @param bool $json Whether to JSON-encode the content if it's an array
+     */
+    public function echo($content, $json = true) {
         foreach ($this->headers as $key => $value) {
             header("$key: $value");
         }
