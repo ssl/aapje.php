@@ -9,7 +9,7 @@
   <img src="https://img.shields.io/github/stars/ssl/aapje.php?style=flat">
   <img src="https://img.shields.io/github/license/ssl/aapje.php?style=flat">
   <br><br>
-  <b style="color:yellow">aapje.php is currently in beta. bugs or other issues can be expected. do not use in production.</b>
+  <b>⚠️ aapje.php is currently in beta. bugs or other issues can be expected. do not use in production. ⚠️</b>
 </p>
 
 ## 🚀 Features
@@ -23,7 +23,7 @@
 
 ## 📦 Installation
 
-1. **Download `aapje.php`:**
+1. **Download `aapje.php`**
 
 2. **Include in Your Project:**
 
@@ -44,9 +44,7 @@
    RewriteRule ^(.*)$ index.php [L]
    ```
 
-   ### Alternative Setup
-
-   Alternatively, you can fork or clone this repository, sync it to a web host, and directly start coding your API inside the `index.php` file.
+Alternatively, you can fork or clone this repository, sync it to a web host, and directly start coding your API inside the `index.php` file.
 
 ## 🛠️ Configuration
 
