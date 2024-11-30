@@ -1,7 +1,6 @@
-
 # aapje.php
 
-aapje.php is a lightweight, single-file PHP framework for building simple APIs. It provides easy routing, request and response handling, and database operations using PDO.
+**aapje.php** is a lightweight, single-file PHP framework designed for building simple and efficient APIs. It offers essential features such as routing, database interactions, middleware support, CORS handling, and utility helper functions, all while maintaining a minimalistic and easy-to-use structure.
 
 <p align="center">
   <img src="https://img.shields.io/github/release/ssl/aapje.php?style=flat">
@@ -9,100 +8,86 @@ aapje.php is a lightweight, single-file PHP framework for building simple APIs. 
   <img src="https://img.shields.io/github/forks/ssl/aapje.php?style=flat">
   <img src="https://img.shields.io/github/stars/ssl/aapje.php?style=flat">
   <img src="https://img.shields.io/github/license/ssl/aapje.php?style=flat">
+  <br><br>
+  <b style="color:yellow">aapje.php is currently in beta. bugs or other issues can be expected. do not use in production.</b>
 </p>
 
-## Features
+## 🚀 Features
 
-- **Routing**: Define routes with placeholders for dynamic parameters.
-- **Request Handling**: Access headers, cookies, files, input data, query parameters, and more.
-- **Response Handling**: Set headers, cookies, status codes, and send responses.
-- **Database Operations**: Perform basic CRUD operations securely using prepared statements.
-- **Lightweight**: Single-file framework that's easy to set up and use.
+- **Routing:** Define routes with dynamic parameters supporting various HTTP methods.
+- **Database Integration:** Simplified PDO-based database interactions with CRUD operations.
+- **Middleware Support:** Execute custom logic before or after route handling.
+- **CORS Support:** Built-in Cross-Origin Resource Sharing configuration for secure API access.
+- **Helpers Class:** Utility functions to streamline common tasks.
+- **Single-File Architecture:** Easy setup and deployment without external dependencies.
 
-## Getting Started
+## 📦 Installation
 
-### Requirements
+1. **Download `aapje.php`:**
 
-- PHP 7.0 or higher
+2. **Include in Your Project:**
 
-### Installation
+   Place `aapje.php` in your project directory and include it in your PHP scripts.
 
-Since aapje.php is a single file, you can simply include it in your project:
+   ```php
+   <?php
+   require 'aapje.php';
+   ```
+
+3. **Web Server Configuration:**
+
+   Ensure that all requests to your website (or specific folder) using `aapje.php` are passed through your routing file.
+
+   ```apache
+   # Example Apache .htaccess file
+   RewriteEngine On
+   RewriteRule ^(.*)$ index.php [L]
+   ```
+
+   ### Alternative Setup
+
+   Alternatively, you can fork or clone this repository, sync it to a web host, and directly start coding your API inside the `index.php` file.
+
+## 🛠️ Configuration
+
+Configuration is optional and **aapje.php** can operate without a database. CORS is disabled by default. When enabling CORS by setting `'enabled'` to `true`, the `origins`, `headers`, and `methods` will default to `'*'` unless explicitly specified.
+
+Configure **aapje.php** using the `setConfig` method. You can set database credentials, CORS settings, and default headers.
 
 ```php
-require 'aapje.php';
-````
-
-Make sure all requests to your website (or folder) using aapje.php are passed through your routing file:
-
-```
-# Apache .htaccess example
-RewriteEngine On
-RewriteRule ^(.*)$ index.php [L]
-```
-
-Or simply fork/clone this repository, sync to a webhost, and directly start coding your API inside the `index.php` file
-
-## Basic Usage
-
-### Setting Up
-
-```php
-<?php
-require 'aapje.php';
-
-// Set up database configuration (optional)
-aapje::setDbConfig([
-    'host' => 'localhost',
-    'dbname' => 'your_database',
-    'user' => 'your_username',
-    'password' => 'your_password',
+aapje::setConfig([
+    'database' => [
+        'host' => 'localhost',
+        'dbname' => 'your_database',
+        'user' => 'your_username',
+        'password' => 'your_password',
+    ],
+    'cors' => [
+        'enabled' => true,
+        'origins' => ['https://example.com', 'https://example.org'], // Allowed origins
+        'methods' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allowed methods
+        'headers' => ['Content-Type', 'Authorization'], // Allowed headers
+        'credentials' => true, // Allow credentials
+    ],
+    'default_headers' => [
+        'X-Powered-By' => 'aapje.php',
+    ],
 ]);
 ```
 
-### Defining Routes
+## 📚 Usage
 
-Define routes using the `aapje::route()` method:
+### 1. **Defining Routes**
 
-```php
-// Home route
-aapje::route('GET', '/', function () {
-    aapje::response()->echo('Hello, world!');
-});
-
-// Route with a parameter
-aapje::route('GET', '/hello/@name', function ($name) {
-    aapje::response()->echo("Hello, $name!");
-});
-```
-
-### Running the Application
-
-Start the application with:
+Define routes using the `route` method, specifying the HTTP method, URL pattern, and callback function.
 
 ```php
-aapje::run();
-```
-
-### Full Example
-
-```php
-<?php
-require 'aapje.php';
-
-// Database Configuration
-aapje::setDbConfig([
-    'host' => 'localhost',
-    'dbname' => 'your_database',
-    'user' => 'your_username',
-    'password' => 'your_password',
-]);
-
-// Routes
-aapje::route('GET', '/', function () {
-    aapje::response()->echo('Hello world!');
+// Responds to all HTTP methods
+aapje::route('*', '/', function () {
+    aapje::response()->echo(['message' => 'Welcome to aapje.php!']);
 });
 
+// GET route with dynamic parameter
 aapje::route('GET', '/user/@id', function ($id) {
     $user = aapje::select('users', '*', ['id' => $id]);
     if ($user) {
@@ -111,7 +96,64 @@ aapje::route('GET', '/user/@id', function ($id) {
         aapje::response()->statusCode(404)->echo(['error' => 'User not found']);
     }
 });
+```
 
+### 2. **Using Middleware**
+
+Register middleware functions to execute custom logic before route handling, such as logging or authentication.
+
+```php
+// Define a middleware function
+function loggingMiddleware($request, $response) {
+    $method = $_SERVER['REQUEST_METHOD'];
+    $uri = $_SERVER['REQUEST_URI'];
+    $ip = $request->ip();
+    error_log("[$method] $uri from $ip");
+}
+
+// Register the middleware
+aapje::middleware('loggingMiddleware');
+```
+
+### 3. **Utilizing Helpers**
+
+Use the `Helpers` class for common utility functions like escaping HTML or handling files.
+
+```php
+aapje::route('GET', '/escape', function () {
+    $unsafeString = '<script>alert("XSS")</script>';
+    $safeString = Helpers::esc($unsafeString);
+    aapje::response()->echo(['escaped' => $safeString]);
+});
+```
+
+### 4. **Handling CORS**
+
+CORS settings are managed via the `setConfig` method. When enabled, **aapje.php** automatically sets the necessary headers and handles preflight `OPTIONS` requests.
+
+```php
+aapje::setConfig([
+    'cors' => [
+        'enabled' => true,
+        'origins' => ['https://example.com'], // Allowed origins
+        'methods' => ['GET', 'POST'], // Allowed HTTP methods
+        'headers' => ['Content-Type', 'Authorization'], // Allowed headers
+        'credentials' => true, // Allow credentials
+    ],
+]);
+
+// Example route to test CORS
+aapje::route('*', '/cors-test', function () {
+    aapje::response()->echo(['message' => 'CORS is configured properly!']);
+});
+```
+
+### 5. **Database Operations**
+
+Perform CRUD operations using built-in methods. Below is an example that demonstrates creating, reading, updating, and deleting a user, along with setting custom headers and handling advanced database queries like sorting and limiting results.
+
+```php
+// Create a new user
 aapje::route('POST', '/user', function () {
     $input = aapje::request()->input();
     $data = [
@@ -123,735 +165,116 @@ aapje::route('POST', '/user', function () {
         aapje::response()->statusCode(400)->echo(['error' => 'Name and email are required']);
     }
 
-    $id = aapje::insert('users', $data);
-    aapje::response()->echo(['created_user_id' => $id]);
+    try {
+        $id = aapje::insert('users', $data);
+        aapje::response()->statusCode(201)->echo(['created_user_id' => $id]);
+    } catch (Exception $e) {
+        aapje::response()->statusCode(500)->echo(['error' => 'Failed to create user']);
+    }
 });
 
-aapje::run();
+// Retrieve all users with sorting and limit
+aapje::route('GET', '/users', function () {
+    $users = aapje::selectAll('users', '*', [], [
+        'orderBy' => 'name',
+        'sort' => 'ASC',
+        'limit' => 10
+    ]);
+    aapje::response()->header('X-Custom-Header', 'CustomValue')->echo($users);
+});
+
+// Update a user
+aapje::route('PUT', '/user/@id', function ($id) {
+    $input = aapje::request()->input();
+    $data = [
+        'name' => $input['name'] ?? null,
+        'email' => $input['email'] ?? null,
+    ];
+
+    if (!$data['name'] && !$data['email']) {
+        aapje::response()->statusCode(400)->echo(['error' => 'At least one of name or email is required']);
+    }
+
+    try {
+        aapje::update('users', $data, ['id' => $id]);
+        aapje::response()->echo(['message' => 'User updated successfully']);
+    } catch (Exception $e) {
+        aapje::response()->statusCode(500)->echo(['error' => 'Failed to update user']);
+    }
+});
+
+// Delete a user
+aapje::route('DELETE', '/user/@id', function ($id) {
+    try {
+        aapje::delete('users', ['id' => $id]);
+        aapje::response()->echo(['message' => 'User deleted successfully']);
+    } catch (Exception $e) {
+        aapje::response()->statusCode(500)->echo(['error' => 'Failed to delete user']);
+    }
+});
 ```
 
-more detailed examples can be found in the [examples.php](examples.php) file of this repo.
+For more comprehensive examples, refer to the [`examples.php`](https://github.com/ssl/aapje.php/blob/main/examples.php) file in the repository.
 
-## Database Examples
+## 🔧 API Reference
 
-### Connecting to the Database
+### **aapje Class**
 
-Set your database configuration:
+- **`setConfig(array $config)`**
 
-```php
-aapje::setDbConfig([
-    'host' => 'localhost',
-    'dbname' => 'your_database',
-    'user' => 'your_username',
-    'password' => 'your_password',
-]);
-```
+  Set global configuration options.
 
-Or, using `.env` file:
+- **`route(string $method, string $pattern, callable $callback)`**
 
-```php
-$config = parse_ini_file('.env');
-aapje::setDbConfig([
-    'host' => $config['dbhost'],
-    'dbname' => $config['dbname'],
-    'user' => $config['dbuser'],
-    'password' => $config['dbpassword'],
-]);
-```
+  Define a new route.
 
-### Performing CRUD Operations
+- **`middleware(callable $callback)`**
 
-aapje.php provides simple methods for database operations: `insert`, `select`, `update`, and `delete`. All these methods use prepared statements to prevent SQL injection and ensure security.
+  Register a middleware function.
 
-#### Insert Data
+- **`run()`**
 
-```php
-$data = [
-    'name' => 'John Doe',
-    'email' => 'john@example.com',
-];
+  Start processing incoming requests.
 
-$id = aapje::insert('users', $data);
-aapje::response()->echo(['created_user_id' => $id]);
-```
+- **Database Methods:**
 
-- **Explanation**:
-  - `insert($table, $data)` inserts a new record into the specified table.
-  - `$table`: The name of the table.
-  - `$data`: An associative array where keys are column names and values are the data to insert.
+  - **`insert(string $table, array $data)`**: Insert a new record.
+  - **`update(string $table, array $data, array $conditions = [])`**: Update existing records.
+  - **`delete(string $table, array $conditions = [])`**: Delete records.
+  - **`select(string $table, $columns = '*', array $conditions = [], array $options = [])`**: Select a single record.
+  - **`selectAll(string $table, $columns = '*', array $conditions = [], array $options = [])`**: Select multiple records.
 
-#### Select Data
+### **Request Class**
 
-```php
-$user = aapje::select(
-    'users',                // Table name
-    ['id', 'name', 'email'],// Columns to select (or '*' for all columns)
-    ['status' => 'active'], // Conditions (WHERE clause)
-    [
-        'orderBy' => 'id',  // Column to order by
-        'sort'    => 'DESC',// Sort direction ('ASC' or 'DESC')
-    ]
-);
-aapje::response()->echo($user);
-```
+- **`header(string $key): ?string`**: Retrieve a specific request header.
+- **`headers(): array`**: Get all request headers.
+- **`input(bool $decode = true, bool $associative = true)`**: Get JSON input from the request body.
+- **`getParam(string $key): ?string`**: Retrieve a specific GET parameter.
+- **`getParams(): array`**: Get all GET parameters.
+- **`postParam(string $key): ?string`**: Retrieve a specific POST parameter.
+- **`postParams(): array`**: Get all POST parameters.
+- **`ip(): string`**: Get the client's IP address.
+- **`userAgent(): ?string`**: Get the client's User-Agent.
 
-- **Explanation**:
-  - `select($table, $columns = '*', $conditions = [], $options = [])` retrieves single record from the specified table.
-    - `$table`: The name of the table.
-    - `$columns`: An array of columns to select, or '\*' to select all columns.
-    - `$conditions`: An associative array of conditions for the WHERE clause.
-    - `$options`: An associative array of options like 'orderBy' and 'sort'.
+### **Response Class**
 
-- **Options**:
-  - **Conditions (WHERE clause)**:
-    - Provide conditions as an associative array. For example, `['status' => 'active', 'age' => 30]` translates to `WHERE status = 'active' AND age = 30`.
-  - **Ordering**:
-    - `'orderBy'`: Specify the column to order by.
-    - `'sort'`: Specify the sort direction, either `'ASC'` (ascending) or `'DESC'` (descending).
+- **`header(string $key, string $value): self`**: Set a response header.
+- **`headers(array $headers): self`**: Set multiple response headers.
+- **`cookie(string $name, string $value, array $options = []): self`**: Set a cookie.
+- **`cookies(array $cookies): self`**: Set multiple cookies.
+- **`statusCode(int $code): self`**: Set the HTTP status code.
+- **`echo($content, bool $json = true)`**: Send the response to the client.
 
-#### Select All Data
+### **Helpers Class**
 
-```php
-$users = aapje::selectAll(
-    'users',                // Table name
-    ['id', 'name', 'email'],// Columns to select (or '*' for all columns)
-    ['status' => 'active'], // Conditions (WHERE clause)
-    [
-        'orderBy' => 'id',  // Column to order by
-        'sort'    => 'DESC',// Sort direction ('ASC' or 'DESC')
-        'limit'   => 10,    // Limit the number of results
-    ]
-);
-aapje::response()->echo($users);
-```
+- **`esc(string $string): string`**: Escape HTML special characters.
+- **`getFile(string $file): string`**: Get the contents of a file.
+- **`putFile(string $file, string $content): void`**: Write content to a file.
 
-- **Explanation**:
-  - `selectAll($table, $columns = '*', $conditions = [], $options = [])` retrieves all records from the specified table.
-    - `$table`: The name of the table.
-    - `$columns`: An array of columns to select, or '\*' to select all columns.
-    - `$conditions`: An associative array of conditions for the WHERE clause.
-    - `$options`: An associative array of options like 'orderBy', 'sort', and 'limit'.
+## 📄 License
 
-- **Options**:
-  - **Conditions (WHERE clause)**:
-    - Provide conditions as an associative array. For example, `['status' => 'active', 'age' => 30]` translates to `WHERE status = 'active' AND age = 30`.
-  - **Ordering**:
-    - `'orderBy'`: Specify the column to order by.
-    - `'sort'`: Specify the sort direction, either `'ASC'` (ascending) or `'DESC'` (descending).
-  - **Limit**:
-    - `'limit'`: Specify the maximum number of records to retrieve.
+**aapje.php** is open-source software licensed under the [MIT License](https://opensource.org/licenses/MIT).
 
-#### Update Data
+---
 
-```php
-$updateData = ['email' => 'john.new@example.com'];
-$conditions = ['id' => $id];
-
-aapje::update('users', $updateData, $conditions);
-aapje::response()->echo(['updated_user_id' => $id]);
-```
-
-- **Explanation**:
-  - `update($table, $data, $conditions = [])` updates records in the specified table.
-    - `$table`: The name of the table.
-    - `$data`: An associative array of columns and their new values.
-    - `$conditions`: An associative array of conditions for the WHERE clause.
-
-#### Delete Data
-
-```php
-$conditions = ['id' => $id];
-
-aapje::delete('users', $conditions);
-aapje::response()->echo(['deleted_user_id' => $id]);
-```
-
-- **Explanation**:
-  - `delete($table, $conditions = [])` deletes records from the specified table.
-    - `$table`: The name of the table.
-    - `$conditions`: An associative array of conditions for the WHERE clause.
-
-
-### Advanced Database Usage
-
-#### Complex Conditions
-
-You can specify multiple conditions in the `$conditions` array:
-
-```php
-$conditions = [
-    'status' => 'active',
-    'age'    => 30,
-];
-
-$users = aapje::select('users', '*', $conditions);
-```
-
-This will generate a WHERE clause like:
-
-```sql
-WHERE status = 'active' AND age = 30
-```
-
-#### Using `LIKE` and Other Operators
-
-Currently, the `select`, `update`, and `delete` methods support only the `=` operator in conditions. For more complex queries involving different operators, you can use the `query` method directly:
-
-```php
-$stmt = aapje::query(
-    'SELECT * FROM users WHERE name LIKE ? OR age > ?',
-    ['%John%', 25]
-);
-$users = $stmt->fetchAll();
-```
-
-#### Ordering and Limiting Results
-
-You can order and limit the results using the `$options` parameter in the `select` method:
-
-```php
-$options = [
-    'orderBy' => 'created_at',
-    'sort'    => 'DESC',
-    'limit'   => 5,
-];
-
-$recentUsers = aapje::select('users', '*', [], $options);
-```
-
-#### Full `select` Method Signature
-
-```php
-$results = aapje::select(
-    $table,     // string: Table name
-    $columns,   // string|array: Columns to select ('*' or array of column names)
-    $conditions,// array: Conditions for WHERE clause
-    $options    // array: Additional options ('orderBy', 'sort', 'limit')
-);
-```
-
-#### Examples with Explanations
-
-**Example 1: Select specific columns with conditions**
-
-```php
-$users = aapje::selectAll(
-    'users',
-    ['id', 'name', 'email'],
-    ['status' => 'active']
-);
-```
-
-- Selects the `id`, `name`, and `email` columns from the `users` table where `status` is `'active'`.
-
-**Example 2: Select all columns with ordering and limit**
-
-```php
-$users = aapje::selectAll(
-    'users',
-    '*',
-    [],
-    [
-        'orderBy' => 'id',
-        'sort'    => 'DESC',
-        'limit'   => 10,
-    ]
-);
-```
-
-- Selects all columns from the `users` table, orders the results by `id` in descending order, and limits the results to 10 records.
-
-**Example 3: Update multiple records**
-
-```php
-$data = ['status' => 'inactive'];
-$conditions = ['last_login' => '2021-01-01'];
-
-aapje::update('users', $data, $conditions);
-```
-
-- Updates the `status` to `'inactive'` for all users whose `last_login` date is `'2021-01-01'`.
-
-**Example 4: Delete records with conditions**
-
-```php
-$conditions = [
-    'status' => 'inactive',
-    'age'    => 35,
-];
-
-aapje::delete('users', $conditions);
-```
-
-- Deletes users from the `users` table where `status` is `'inactive'` and `age` is `35`.
-
-### Using the `query` Method for Custom Queries
-
-For queries that cannot be constructed using the provided methods, use the `query` method directly:
-
-```php
-$stmt = aapje::query(
-    'SELECT * FROM users WHERE name LIKE ? AND age BETWEEN ? AND ? ORDER BY created_at DESC LIMIT ?',
-    ['%Doe%', 20, 30, 5]
-);
-$users = $stmt->fetchAll();
-```
-
-- **Explanation**:
-  - `query($query, $params = [])` executes a raw SQL query with parameter binding.
-    - `$query`: The SQL query with placeholders (`?`).
-    - `$params`: An array of parameters to bind to the placeholders.
-
-### Security Considerations
-
-- **Input Validation**: Always validate user input before using it in database operations.
-- **Prepared Statements**: aapje.php uses prepared statements to prevent SQL injection attacks.
-- **Identifier Validation**: aapje.php validates table and column names to prevent injection via identifiers.
-
-### Limitations
-
-- **Operators**: The `select`, `update`, and `delete` methods support only the `=` operator in conditions.
-- **Complex Conditions**: For complex WHERE clauses (e.g., using `LIKE`, `IN`, `BETWEEN`), use the `query` method.
-
-## Detailed Explanation of Database Functions
-
-### `aapje::insert($table, $data)`
-
-- **Description**: Inserts a new record into a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$data` (array): Associative array of column-value pairs.
-- **Returns**: The last inserted ID.
-- **Example**:
-
-  ```php
-  $id = aapje::insert('users', ['name' => 'Jane', 'email' => 'jane@example.com']);
-  ```
-
-### `aapje::select($table, $columns = '*', $conditions = [], $options = [])`
-
-- **Description**: Retrieves a single record from a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$columns` (string|array): Columns to select ('\*' or an array of column names).
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-  - `$options` (array): Additional options ('orderBy', 'sort').
-- **Returns**: An array of the single record.
-- **Options Explained**:
-  - **'orderBy'** (string): Column name to order the results by.
-  - **'sort'** (string): Sort direction, either 'ASC' or 'DESC'.
-- **Example**:
-
-  ```php
-  $user = aapje::select('users', '*', ['status' => 'active'], ['orderBy' => 'id', 'sort' => 'DESC']);
-  ```
-
-### `aapje::selectAll($table, $columns = '*', $conditions = [], $options = [])`
-
-- **Description**: Retrieves all records from a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$columns` (string|array): Columns to select ('\*' or an array of column names).
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-  - `$options` (array): Additional options ('limit', 'orderBy', 'sort').
-- **Returns**: An array of records.
-- **Options Explained**:
-  - **'limit'** (int): Maximum number of records to retrieve.
-  - **'orderBy'** (string): Column name to order the results by.
-  - **'sort'** (string): Sort direction, either 'ASC' or 'DESC'.
-- **Example**:
-
-  ```php
-  $users = aapje::selectAll('users', '*', ['status' => 'active'], ['limit' => 10, 'orderBy' => 'id', 'sort' => 'DESC']);
-  ```
-
-### `aapje::update($table, $data, $conditions = [])`
-
-- **Description**: Updates records in a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$data` (array): Associative array of column-value pairs to update.
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-- **Example**:
-
-  ```php
-  aapje::update('users', ['email' => 'new@example.com'], ['id' => $id]);
-  ```
-
-### `aapje::delete($table, $conditions = [])`
-
-- **Description**: Deletes records from a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-- **Example**:
-
-  ```php
-  aapje::delete('users', ['id' => $id]);
-  ```
-
-### `aapje::query($query, $params = [])`
-
-- **Description**: Executes a raw SQL query with optional parameters.
-- **Parameters**:
-  - `$query` (string): The SQL query with placeholders (`?`).
-  - `$params` (array): Parameters to bind in the query.
-- **Returns**: PDOStatement object.
-- **Example**:
-
-  ```php
-  $stmt = aapje::query('SELECT * FROM users WHERE email LIKE ?', ['%example.com']);
-  $users = $stmt->fetchAll();
-  ```
-
-
-## Detailed Explanation of Functions
-
-### Routing
-
-#### `aapje::route($method, $pattern, $callback)`
-
-- **Description**: Defines a route that responds to a specific HTTP method and URL pattern.
-- **Parameters**:
-  - `$method` (string): HTTP method (e.g., 'GET', 'POST').
-  - `$pattern` (string): URL pattern. Use `@param` for dynamic segments.
-  - `$callback` (callable): Function to execute when the route matches.
-- **Example**:
-
-  ```php
-  aapje::route('GET', '/user/@id', function ($id) {
-      // Your code here
-  });
-  ```
-
-### Request Handling
-
-Access the request object using `aapje::request()`.
-
-#### `request()->header($key)`
-
-- **Description**: Retrieves the value of a specific HTTP request header.
-- **Parameters**:
-  - `$key` (string): The header name.
-- **Returns**: The header value or `null` if not found.
-- **Example**:
-
-  ```php
-  $authToken = aapje::request()->header('Authorization');
-  ```
-
-#### `request()->headers()`
-
-- **Description**: Retrieves all HTTP request headers.
-- **Returns**: An associative array of headers.
-- **Example**:
-
-  ```php
-  $headers = aapje::request()->headers();
-  ```
-
-#### `request()->cookie($key)`
-
-- **Description**: Retrieves a specific cookie value.
-- **Parameters**:
-  - `$key` (string): The cookie name.
-- **Returns**: The cookie value or `null` if not found.
-- **Example**:
-
-  ```php
-  $session = aapje::request()->cookie('PHPSESSID');
-  ```
-
-#### `request()->cookies()`
-
-- **Description**: Retrieves all cookies.
-- **Returns**: An associative array of cookies.
-- **Example**:
-
-  ```php
-  $cookies = aapje::request()->cookies();
-  ```
-
-#### `request()->file($key)`
-
-- **Description**: Retrieves information about an uploaded file.
-- **Parameters**:
-  - `$key` (string): The name of the file input field.
-- **Returns**: An array with file information or `null` if not found.
-- **Example**:
-
-  ```php
-  $file = aapje::request()->file('avatar');
-  ```
-
-#### `request()->files()`
-
-- **Description**: Retrieves all uploaded files.
-- **Returns**: An array of files.
-- **Example**:
-
-  ```php
-  $files = aapje::request()->files();
-  ```
-
-#### `request()->input($decode = true)`
-
-- **Description**: Retrieves the input data from the request body. Automatically decodes JSON input.
-- **Parameters**:
-  - `$decode` (boolean): If the content should be json decoded.
-- **Returns**: The decoded input data.
-- **Example**:
-
-  ```php
-  $data = aapje::request()->input();
-  ```
-
-#### `request()->getParam($key)`
-
-- **Description**: Retrieves a specific GET parameter.
-- **Parameters**:
-  - `$key` (string): The parameter name.
-- **Returns**: The parameter value or `null` if not found.
-- **Example**:
-
-  ```php
-  $page = aapje::request()->getParam('page');
-  ```
-
-#### `request()->getParams()`
-
-- **Description**: Retrieves all GET parameters.
-- **Returns**: An associative array of GET parameters.
-- **Example**:
-
-  ```php
-  $params = aapje::request()->getParams();
-  ```
-
-#### `request()->postParam($key)`
-
-- **Description**: Retrieves a specific POST parameter.
-- **Parameters**:
-  - `$key` (string): The parameter name.
-- **Returns**: The parameter value or `null` if not found.
-- **Example**:
-
-  ```php
-  $username = aapje::request()->postParam('username');
-  ```
-
-#### `request()->postParams()`
-
-- **Description**: Retrieves all POST parameters.
-- **Returns**: An associative array of POST parameters.
-- **Example**:
-
-  ```php
-  $params = aapje::request()->postParams();
-  ```
-
-#### `request()->ip()`
-
-- **Description**: Retrieves the client's IP address.
-- **Returns**: The IP address as a string.
-- **Example**:
-
-  ```php
-  $ipAddress = aapje::request()->ip();
-  ```
-
-#### `request()->userAgent()`
-
-- **Description**: Retrieves the client's User-Agent string.
-- **Returns**: The User-Agent string or `null` if not available.
-- **Example**:
-
-  ```php
-  $userAgent = aapje::request()->userAgent();
-  ```
-
-### Response Handling
-
-Access the response object using `aapje::response()`.
-
-#### `response()->header($key, $value)`
-
-- **Description**: Sets an HTTP response header.
-- **Parameters**:
-  - `$key` (string): The header name.
-  - `$value` (string): The header value.
-- **Returns**: The response object (for chaining).
-- **Example**:
-
-  ```php
-  aapje::response()->header('Content-Type', 'application/json');
-  ```
-
-#### `response()->headers($headers)`
-
-- **Description**: Sets multiple HTTP response headers.
-- **Parameters**:
-  - `$headers` (array): Associative array of headers.
-- **Returns**: The response object (for chaining).
-- **Example**:
-
-  ```php
-  aapje::response()->headers([
-      'Content-Type' => 'application/json',
-      'Cache-Control' => 'no-cache',
-  ]);
-  ```
-
-#### `response()->cookie($name, $value, $options = [])`
-
-- **Description**: Sets a cookie.
-- **Parameters**:
-  - `$name` (string): The cookie name.
-  - `$value` (string): The cookie value.
-  - `$options` (array): Additional cookie options (e.g., 'expires', 'path').
-- **Returns**: The response object (for chaining).
-- **Example**:
-
-  ```php
-  aapje::response()->cookie('session', 'abc123', ['expires' => time() + 3600]);
-  ```
-
-#### `response()->cookies($cookies)`
-
-- **Description**: Sets multiple cookies.
-- **Parameters**:
-  - `$cookies` (array): Associative array of cookies.
-- **Returns**: The response object (for chaining).
-- **Example**:
-
-  ```php
-  aapje::response()->cookies([
-      'user' => ['value' => 'john_doe', 'options' => ['path' => '/']],
-      'token' => ['value' => 'xyz789', 'options' => ['expires' => time() + 3600]],
-  ]);
-  ```
-
-#### `response()->statusCode($code)`
-
-- **Description**: Sets the HTTP status code for the response.
-- **Parameters**:
-  - `$code` (int): The status code (e.g., 200, 404).
-- **Returns**: The response object (for chaining).
-- **Example**:
-
-  ```php
-  aapje::response()->statusCode(404);
-  ```
-
-#### `response()->echo($content, $json=true)`
-
-- **Description**: Sends the response to the client.
-- **Parameters**:
-  - `$content` (mixed): The content to send. If it's an array and `$json` is true, it will be JSON-encoded.
-  - `$json` (boolean): If content should be json encoded or not.
-- **Example**:
-
-  ```php
-  aapje::response()->echo(['message' => 'Success']);
-  ```
-
-    ```php
-  aapje::response()->echo($file, false);
-  ```
-
-### Database Functions
-
-#### `aapje::setDbConfig($config)`
-
-- **Description**: Sets the database configuration.
-- **Parameters**:
-  - `$config` (array): Database configuration parameters ('host', 'dbname', 'user', 'password').
-- **Example**:
-
-  ```php
-  aapje::setDbConfig([
-      'host' => 'localhost',
-      'dbname' => 'test_db',
-      'user' => 'root',
-      'password' => '',
-  ]);
-  ```
-
-#### `aapje::query($query, $params = [])`
-
-- **Description**: Executes a raw SQL query with optional parameters.
-- **Parameters**:
-  - `$query` (string): The SQL query.
-  - `$params` (array): Parameters to bind in the query.
-- **Returns**: PDOStatement object.
-- **Example**:
-
-  ```php
-  $stmt = aapje::query('SELECT * FROM users WHERE id = ?', [$id]);
-  $user = $stmt->fetch();
-  ```
-
-#### `aapje::insert($table, $data)`
-
-- **Description**: Inserts a new record into a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$data` (array): Associative array of column-value pairs.
-- **Returns**: The last inserted ID.
-- **Example**:
-
-  ```php
-  $id = aapje::insert('users', ['name' => 'Jane', 'email' => 'jane@example.com']);
-  ```
-
-#### `aapje::update($table, $data, $conditions = [])`
-
-- **Description**: Updates records in a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$data` (array): Associative array of column-value pairs to update.
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-- **Example**:
-
-  ```php
-  aapje::update('users', ['email' => 'new@example.com'], ['id' => $id]);
-  ```
-
-#### `aapje::delete($table, $conditions = [])`
-
-- **Description**: Deletes records from a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-- **Example**:
-
-  ```php
-  aapje::delete('users', ['id' => $id]);
-  ```
-
-#### `aapje::select($table, $columns = '*', $conditions = [], $options = [])`
-
-- **Description**: Retrieves records from a table.
-- **Parameters**:
-  - `$table` (string): The table name.
-  - `$columns` (string|array): Columns to select ('\*' or an array of column names).
-  - `$conditions` (array): Associative array of conditions for the WHERE clause.
-  - `$options` (array): Additional options ('limit', 'orderBy', 'sort').
-- **Returns**: An array of records.
-- **Example**:
-
-  ```php
-  $users = aapje::select('users', ['id', 'name'], ['status' => 'active'], ['limit' => 10]);
-  ```
-
-## Error Handling
-
-aapje.php handles exceptions thrown within routes and returns an HTTP 418 status code with an error message.
-
-```php
-try {
-    // aapje.php routing
-} catch (Exception $e) {
-    aapje::response()->statusCode(418)->echo(['error' => $e->getMessage()]);
-}
-```
+Feel free to contribute to **aapje.php** by submitting issues or pull requests.
