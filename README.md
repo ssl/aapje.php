@@ -271,7 +271,7 @@ For more comprehensive examples, refer to the [`examples.php`](https://github.co
 
 ## 📄 License
 
-**aapje.php** is open-source software licensed under the [MIT License](https://opensource.org/licenses/MIT).
+**aapje.php** is open-source software licensed under the [MIT License](https://github.com/ssl/aapje.php/blob/main/license.txt).
 
 ---
 
