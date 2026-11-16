@@ -5,7 +5,8 @@
  * A lightweight, single-file PHP framework for building simple APIs.
  * 
  * https://github.com/ssl/aapje.php
- * Version: 0.2
+ * Version: 0.3
+ * Requires: PHP 8.0+
  * License: MIT
  * 
  * The MIT License (MIT)
@@ -31,12 +32,14 @@
  */
 
 class aapje {
-    public static $version = '0.2';
+    public static $version = '0.3';
     private static $routes = [];
     private static $middleware = [];
     private static $config = [
+        'debug' => false,
         'database' => [
             'host' => '',
+            'port' => '',
             'dbname' => '',
             'user' => '',
             'password' => ''
@@ -113,6 +116,11 @@ class aapje {
      */
     public static function setConfig(array $config) {
         foreach ($config as $key => $value) {
+            // Debug mode: show exception messages in error responses
+            if ($key === 'debug') {
+                self::$config['debug'] = (bool) $value;
+            }
+
             // CORS Configuration
             if ($key === 'cors' && is_array($value)) {
                 self::$config['cors'] = array_merge(self::$config['cors'], $value);
@@ -141,41 +149,100 @@ class aapje {
      * Start processing the incoming request.
      */
     public static function run() {
-        $requestMethod = $_SERVER['REQUEST_METHOD'];
-        $requestUri = parse_url($_SERVER['REQUEST_URI'], PHP_URL_PATH);
-
         try {
+            $request = self::request();
+            $response = self::response();
+            $method = $request->method();
+            $path = $request->path();
+
+            // Handle CORS first, so preflight requests and middleware responses get the headers
+            if (self::$config['cors']['enabled']) {
+                self::handleCORS($request, $response);
+            }
+
             // Execute Middleware
             foreach (self::$middleware as $middleware) {
-                $middleware(self::request(), self::response());
+                $middleware($request, $response);
             }
 
-            // Handle CORS if enabled
-            if (self::$config['cors']['enabled']) {
-                self::handleCORS(self::request(), self::response());
-            }
-
-            $routeFound = false;
+            $allowedMethods = [];
+            $headFallback = null;
             foreach (self::$routes as $route) {
-                if ($route['method'] === '*' || $route['method'] === strtoupper($requestMethod)) {
-                    $pattern = preg_replace('/@([\w]+)/', '(?P<$1>[^/]+)', $route['pattern']);
-                    $pattern = '#^' . $pattern . '$#';
-                    if (preg_match($pattern, $requestUri, $matches)) {
-                        $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
-                        call_user_func_array($route['callback'], $params);
-                        return;
-                    }
-                    $routeFound = true;
+                $pattern = preg_replace('/@([\w]+)/', '(?P<$1>[^/]+)', $route['pattern']);
+                if (!preg_match('#^' . $pattern . '$#D', $path, $matches)) {
+                    continue;
                 }
+                if ($route['method'] === '*' || $route['method'] === $method) {
+                    self::dispatch($route['callback'], $matches);
+                    return;
+                }
+                // A HEAD request falls back to the first matching GET route
+                if ($method === 'HEAD' && $route['method'] === 'GET' && $headFallback === null) {
+                    $headFallback = [$route['callback'], $matches];
+                }
+                $allowedMethods[$route['method']] = true;
             }
-            if ($routeFound) {
-                self::response()->statusCode(405)->echo(['error' => 'Method Not Allowed']);
-            } else {
-                self::response()->statusCode(404)->echo(['error' => 'Not Found']);
+
+            if ($headFallback !== null) {
+                self::dispatch($headFallback[0], $headFallback[1]);
+                return;
             }
-        } catch (Exception $e) {
-            self::response()->statusCode(500)->echo(['error' => $e->getMessage()]);
+
+            if (!empty($allowedMethods)) {
+                // The path exists, but not for this method
+                $response->header('Allow', implode(', ', array_keys($allowedMethods)));
+                $response->statusCode(405)->echo(['error' => 'Method Not Allowed']);
+            }
+            $response->statusCode(404)->echo(['error' => 'Not Found']);
+        } catch (\Throwable $e) {
+            self::handleError($e);
         }
+    }
+
+    /**
+     * Call a route callback with the parameters matched from the URL.
+     *
+     * Parameters are passed by name when the callback declares all of them,
+     * and in the order they appear in the pattern otherwise.
+     *
+     * @param callable $callback
+     * @param array $matches Result of preg_match on the route pattern
+     */
+    private static function dispatch(callable $callback, array $matches) {
+        $params = [];
+        foreach ($matches as $key => $value) {
+            if (is_string($key)) {
+                $params[$key] = rawurldecode($value);
+            }
+        }
+
+        $declared = [];
+        foreach ((new ReflectionFunction(Closure::fromCallable($callback)))->getParameters() as $parameter) {
+            $declared[] = $parameter->getName();
+        }
+        if (!empty(array_diff(array_keys($params), $declared))) {
+            $params = array_values($params);
+        }
+
+        call_user_func_array($callback, $params);
+
+        // The callback returned without sending a response: still send the headers
+        if (!headers_sent() && !ob_get_length()) {
+            self::response()->sendHeaders();
+        }
+    }
+
+    /**
+     * Log an uncaught error and answer with a 500.
+     *
+     * The message is only sent to the client when 'debug' is enabled.
+     *
+     * @param \Throwable $e
+     */
+    private static function handleError(\Throwable $e) {
+        error_log((string) $e);
+        $message = self::$config['debug'] ? $e->getMessage() : 'Internal Server Error';
+        self::response()->statusCode(500)->echo(['error' => $message]);
     }
 
     /**
@@ -188,24 +255,28 @@ class aapje {
         $corsConfig = self::$config['cors'];
 
         // Determine allowed origins
-        $allowedOrigins = $corsConfig['origins'];
+        $allowedOrigins = (array) $corsConfig['origins'];
         $origin = $request->header('Origin');
 
-        if (in_array('*', $allowedOrigins)) {
+        if (in_array('*', $allowedOrigins, true)) {
             $response->header('Access-Control-Allow-Origin', '*');
-        } elseif ($origin && in_array($origin, $allowedOrigins)) {
-            $response->header('Access-Control-Allow-Origin', $origin);
+        } else {
+            // The response depends on the Origin header, tell caches about it
+            $response->header('Vary', 'Origin');
+            if ($origin && in_array($origin, $allowedOrigins, true)) {
+                $response->header('Access-Control-Allow-Origin', $origin);
+            }
         }
 
         // Set other CORS headers
-        $response->header('Access-Control-Allow-Methods', implode(', ', $corsConfig['methods']));
-        $response->header('Access-Control-Allow-Headers', implode(', ', $corsConfig['headers']));
+        $response->header('Access-Control-Allow-Methods', implode(', ', (array) $corsConfig['methods']));
+        $response->header('Access-Control-Allow-Headers', implode(', ', (array) $corsConfig['headers']));
         if ($corsConfig['credentials']) {
             $response->header('Access-Control-Allow-Credentials', 'true');
         }
 
         // Handle preflight OPTIONS request
-        if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+        if ($request->method() === 'OPTIONS') {
             $response->statusCode(204)->echo(null, false);
         }
     }
@@ -220,6 +291,9 @@ class aapje {
                 self::$config['database']['host'],
                 self::$config['database']['dbname']
             );
+            if (!empty(self::$config['database']['port'])) {
+                $dsn .= ';port=' . (int) self::$config['database']['port'];
+            }
             self::$pdo = new PDO($dsn, self::$config['database']['user'], self::$config['database']['password'], [
                 PDO::ATTR_ERRMODE => PDO::ERRMODE_EXCEPTION,
                 PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
@@ -233,8 +307,17 @@ class aapje {
      * @param string $query  SQL query with placeholders
      * @param array $params  Parameters to bind to the query
      * @return PDOStatement
+     * @throws Exception     If a parameter is an array
      */
     public static function query(string $query, array $params = []) {
+        foreach ($params as $key => $value) {
+            if (is_bool($value)) {
+                // PDO would bind false as an empty string
+                $params[$key] = (int) $value;
+            } elseif (is_array($value)) {
+                throw new Exception('Query parameters cannot be arrays');
+            }
+        }
         self::connectDb();
         $stmt = self::$pdo->prepare($query);
         $stmt->execute($params);
@@ -242,31 +325,127 @@ class aapje {
     }
 
     /**
-     * Validate query options to prevent SQL injection via identifiers.
+     * Validate and quote a table or column name.
      *
-     * @param array $options Query options (table, columns, orderBy, limit, sort)
-     * @throws Exception if validation fails
+     * This checks the syntax of the name, it does not check that the caller
+     * is allowed to use that table or column.
+     *
+     * @param mixed $name Identifier to validate
+     * @return string     The identifier wrapped in backticks
+     * @throws Exception  If the identifier is not valid
      */
-    private static function checkQuery(array $options) {
-        foreach (['table', 'columns', 'orderBy'] as $key) {
-            if (isset($options[$key])) {
-                if ($key === 'columns' && $options[$key] === '*') {
-                    continue; // Allow '*'
-                }
-                $identifiers = is_array($options[$key]) ? $options[$key] : [$options[$key]];
-                foreach ($identifiers as $identifier) {
-                    if (!preg_match('/^[a-zA-Z0-9_\-]+$/', $identifier)) {
-                        throw new Exception("Invalid identifier: {$identifier}");
-                    }
-                }
+    private static function identifier($name): string {
+        if (!is_string($name) || !preg_match('/^[a-zA-Z0-9_\-]+\z/', $name)) {
+            throw new Exception('Invalid identifier: ' . (is_scalar($name) ? $name : gettype($name)));
+        }
+        return '`' . $name . '`';
+    }
+
+    /**
+     * Build a comma separated list of quoted column names.
+     *
+     * @param array $columns Column names
+     * @return string
+     * @throws Exception If the list is empty or contains an invalid name
+     */
+    private static function identifiers(array $columns): string {
+        if (empty($columns)) {
+            throw new Exception('At least one column is required');
+        }
+        return implode(',', array_map([self::class, 'identifier'], $columns));
+    }
+
+    /**
+     * Build a WHERE clause from column-value pairs joined with AND.
+     *
+     * @param array $conditions Associative array of conditions (a null value becomes IS NULL)
+     * @param array $params     Bound parameters, values are appended to it
+     * @return string           The clause with a leading space, or '' without conditions
+     */
+    private static function where(array $conditions, array &$params): string {
+        if (empty($conditions)) {
+            return '';
+        }
+        $wheres = [];
+        foreach ($conditions as $key => $value) {
+            $column = self::identifier($key);
+            if ($value === null) {
+                $wheres[] = "$column IS NULL";
+            } else {
+                $wheres[] = "$column = ?";
+                $params[] = $value;
             }
         }
-        if (isset($options['limit']) && (!is_int($options['limit']) || $options['limit'] <= 0)) {
-            throw new Exception("Invalid limit: {$options['limit']}");
+        return ' WHERE ' . implode(' AND ', $wheres);
+    }
+
+    /**
+     * Validate a 'limit' or 'offset' option.
+     *
+     * @param mixed $value Integer, or a string of digits
+     * @param string $name Option name, for the error message
+     * @param int $min     Lowest allowed value
+     * @return int
+     * @throws Exception   If the value is not a whole number or too low
+     */
+    private static function intOption($value, string $name, int $min): int {
+        if (is_string($value) && ctype_digit($value)) {
+            $value = (int) $value;
         }
-        if (isset($options['sort']) && !in_array(strtoupper($options['sort']), ['ASC', 'DESC'], true)) {
-            throw new Exception("Invalid sort: {$options['sort']}");
+        if (!is_int($value) || $value < $min) {
+            throw new Exception("Invalid $name");
         }
+        return $value;
+    }
+
+    /**
+     * Build and run a SELECT query.
+     *
+     * @param string       $table
+     * @param string|array $columns
+     * @param array        $conditions
+     * @param array        $options
+     * @param bool         $single     Whether to force LIMIT 1
+     * @return PDOStatement
+     * @throws Exception
+     */
+    private static function runSelect(string $table, $columns, array $conditions, array $options, bool $single) {
+        if ($columns === '*') {
+            $cols = '*';
+        } elseif (is_array($columns)) {
+            $cols = self::identifiers($columns);
+        } else {
+            throw new Exception("Columns must be '*' or an array of columns");
+        }
+
+        $params = [];
+        $query = "SELECT $cols FROM " . self::identifier($table) . self::where($conditions, $params);
+
+        if (isset($options['orderBy'])) {
+            $query .= ' ORDER BY ' . self::identifier($options['orderBy']);
+            if (isset($options['sort'])) {
+                $sort = is_string($options['sort']) ? strtoupper($options['sort']) : '';
+                if ($sort !== 'ASC' && $sort !== 'DESC') {
+                    throw new Exception('Invalid sort');
+                }
+                $query .= " $sort";
+            }
+        }
+
+        if ($single) {
+            $query .= ' LIMIT 1';
+        } elseif (isset($options['limit'])) {
+            $query .= ' LIMIT ' . self::intOption($options['limit'], 'limit', 1);
+        }
+
+        if (isset($options['offset'])) {
+            if (!$single && !isset($options['limit'])) {
+                throw new Exception('The offset option needs a limit');
+            }
+            $query .= ' OFFSET ' . self::intOption($options['offset'], 'offset', 0);
+        }
+
+        return self::query($query, $params);
     }
 
     /**
@@ -278,10 +457,9 @@ class aapje {
      * @throws Exception   If query fails
      */
     public static function insert(string $table, array $data) {
-        self::checkQuery(['table' => $table, 'columns' => array_keys($data)]);
-        $keys = implode(',', array_map(function($key) { return "$key"; }, array_keys($data)));
+        $keys = self::identifiers(array_keys($data));
         $placeholders = implode(',', array_fill(0, count($data), '?'));
-        $query = "INSERT INTO $table ($keys) VALUES ($placeholders)";
+        $query = 'INSERT INTO ' . self::identifier($table) . " ($keys) VALUES ($placeholders)";
         self::query($query, array_values($data));
         return self::$pdo->lastInsertId();
     }
@@ -292,28 +470,25 @@ class aapje {
      * @param string $table      Table name
      * @param array $data        Associative array of column-value pairs to update
      * @param array $conditions  Associative array of conditions for the WHERE clause
-     * @throws Exception         If query fails
+     * @param bool $allRows      Must be true to update every row when there are no conditions
+     * @return int               Number of rows changed
+     * @throws Exception         If query fails, or there are no conditions and $allRows is false
      */
-    public static function update(string $table, array $data, array $conditions = []) {
-        self::checkQuery(['table' => $table, 'columns' => array_keys($data)]);
-        $set = implode(',', array_map(function($key) { return "$key = ?"; }, array_keys($data)));
-
-        $params = array_values($data);
-
-        if (!empty($conditions)) {
-            $wheres = [];
-            foreach ($conditions as $key => $value) {
-                self::checkQuery(['columns' => $key]);
-                $wheres[] = "$key = ?";
-                $params[] = $value;
-            }
-            $whereClause = implode(' AND ', $wheres);
-            $query = "UPDATE $table SET $set WHERE $whereClause";
-        } else {
-            $query = "UPDATE $table SET $set";
+    public static function update(string $table, array $data, array $conditions = [], bool $allRows = false) {
+        if (empty($data)) {
+            throw new Exception('At least one column is required');
         }
+        if (empty($conditions) && !$allRows) {
+            throw new Exception('update() without conditions changes every row, pass $allRows = true to allow it');
+        }
+        $set = [];
+        foreach (array_keys($data) as $key) {
+            $set[] = self::identifier($key) . ' = ?';
+        }
+        $params = array_values($data);
+        $query = 'UPDATE ' . self::identifier($table) . ' SET ' . implode(',', $set) . self::where($conditions, $params);
 
-        self::query($query, $params);
+        return self::query($query, $params)->rowCount();
     }
 
     /**
@@ -321,25 +496,18 @@ class aapje {
      *
      * @param string $table      Table name
      * @param array $conditions  Associative array of conditions for the WHERE clause
-     * @throws Exception         If query fails
+     * @param bool $allRows      Must be true to delete every row when there are no conditions
+     * @return int               Number of rows deleted
+     * @throws Exception         If query fails, or there are no conditions and $allRows is false
      */
-    public static function delete(string $table, array $conditions = []) {
-        self::checkQuery(['table' => $table]);
-        $query = "DELETE FROM $table";
-
-        $params = [];
-        if (!empty($conditions)) {
-            $wheres = [];
-            foreach ($conditions as $key => $value) {
-                self::checkQuery(['columns' => $key]);
-                $wheres[] = "$key = ?";
-                $params[] = $value;
-            }
-            $whereClause = implode(' AND ', $wheres);
-            $query .= " WHERE $whereClause";
+    public static function delete(string $table, array $conditions = [], bool $allRows = false) {
+        if (empty($conditions) && !$allRows) {
+            throw new Exception('delete() without conditions deletes every row, pass $allRows = true to allow it');
         }
+        $params = [];
+        $query = 'DELETE FROM ' . self::identifier($table) . self::where($conditions, $params);
 
-        self::query($query, $params);
+        return self::query($query, $params)->rowCount();
     }
 
     /**
@@ -348,51 +516,12 @@ class aapje {
      * @param string       $table      Table name
      * @param string|array $columns    Columns to select ('*' or array of column names)
      * @param array        $conditions Associative array of conditions for the WHERE clause
-     * @param array        $options    Additional options ('orderBy', 'sort')
+     * @param array        $options    Additional options ('orderBy', 'sort', 'offset')
      * @return array|false             Single record as an associative array or false if not found
      * @throws Exception               If query fails
      */
     public static function select(string $table, $columns = '*', array $conditions = [], array $options = []) {
-        if ($columns !== '*') {
-            if (!is_array($columns)) {
-                throw new Exception("Columns must be '*' or an array of columns");
-            }
-            self::checkQuery(['table' => $table, 'columns' => $columns]);
-            $cols = implode(',', array_map(function($col) { return "$col"; }, $columns));
-        } else {
-            $cols = '*';
-        }
-        self::checkQuery([
-            'table' => $table,
-            'orderBy' => $options['orderBy'] ?? null,
-            'sort' => $options['sort'] ?? null,
-        ]);
-        $query = "SELECT $cols FROM $table";
-
-        $params = [];
-        if (!empty($conditions)) {
-            $wheres = [];
-            foreach ($conditions as $key => $value) {
-                self::checkQuery(['columns' => $key]);
-                $wheres[] = "$key = ?";
-                $params[] = $value;
-            }
-            $whereClause = implode(' AND ', $wheres);
-            $query .= " WHERE $whereClause";
-        }
-
-        if (isset($options['orderBy'])) {
-            $orderBy = $options['orderBy'];
-            $query .= " ORDER BY $orderBy";
-            if (isset($options['sort'])) {
-                $query .= " " . strtoupper($options['sort']);
-            }
-        }
-
-        $query .= " LIMIT 1";
-
-        $stmt = self::query($query, $params);
-        return $stmt->fetch();
+        return self::runSelect($table, $columns, $conditions, $options, true)->fetch();
     }
 
     /**
@@ -401,54 +530,12 @@ class aapje {
      * @param string       $table      Table name
      * @param string|array $columns    Columns to select ('*' or array of column names)
      * @param array        $conditions Associative array of conditions for the WHERE clause
-     * @param array        $options    Additional options ('orderBy', 'sort', 'limit')
+     * @param array        $options    Additional options ('orderBy', 'sort', 'limit', 'offset')
      * @return array                   Array of records
      * @throws Exception               If query fails
      */
     public static function selectAll(string $table, $columns = '*', array $conditions = [], array $options = []) {
-        if ($columns !== '*') {
-            if (!is_array($columns)) {
-                throw new Exception("Columns must be '*' or an array of columns");
-            }
-            self::checkQuery(['table' => $table, 'columns' => $columns]);
-            $cols = implode(',', array_map(function($col) { return "$col"; }, $columns));
-        } else {
-            $cols = '*';
-        }
-        self::checkQuery([
-            'table' => $table,
-            'orderBy' => $options['orderBy'] ?? null,
-            'sort' => $options['sort'] ?? null,
-            'limit' => $options['limit'] ?? null,
-        ]);
-        $query = "SELECT $cols FROM $table";
-
-        $params = [];
-        if (!empty($conditions)) {
-            $wheres = [];
-            foreach ($conditions as $key => $value) {
-                self::checkQuery(['columns' => $key]);
-                $wheres[] = "$key = ?";
-                $params[] = $value;
-            }
-            $whereClause = implode(' AND ', $wheres);
-            $query .= " WHERE $whereClause";
-        }
-
-        if (isset($options['orderBy'])) {
-            $orderBy = $options['orderBy'];
-            $query .= " ORDER BY $orderBy";
-            if (isset($options['sort'])) {
-                $query .= " " . strtoupper($options['sort']);
-            }
-        }
-
-        if (isset($options['limit'])) {
-            $query .= " LIMIT " . intval($options['limit']);
-        }
-
-        $stmt = self::query($query, $params);
-        return $stmt->fetchAll();
+        return self::runSelect($table, $columns, $conditions, $options, false)->fetchAll();
     }
 }
 
@@ -465,7 +552,7 @@ class Helpers {
      * @return string        The escaped string.
      */
     public static function esc(string $string): string {
-        return htmlspecialchars($string, ENT_QUOTES, 'UTF-8');
+        return htmlspecialchars($string, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
     }
 
     /**
@@ -473,9 +560,14 @@ class Helpers {
      * 
      * @param string $file Path to the file.
      * @return string      The file contents.
+     * @throws Exception   If the file cannot be read.
      */
     public static function getFile(string $file): string {
-        return file_get_contents($file);
+        $content = @file_get_contents($file);
+        if ($content === false) {
+            throw new Exception('Unable to read file');
+        }
+        return $content;
     }
 
     /**
@@ -483,9 +575,12 @@ class Helpers {
      * @param string $file      Path to the file.
      * @param string $content  The new content.
      * @return void
+     * @throws Exception       If the file cannot be written.
      */
     public static function putFile(string $file, string $content): void {
-        file_put_contents($file, $content);
+        if (@file_put_contents($file, $content) === false) {
+            throw new Exception('Unable to write file');
+        }
     }
 }
 
@@ -494,14 +589,53 @@ class Helpers {
  */
 class Request {
     /**
+     * Retrieve the HTTP request method, in upper case.
+     *
+     * @return string
+     */
+    public function method(): string {
+        return strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET');
+    }
+
+    /**
+     * Retrieve the request path, without the query string.
+     *
+     * This is the path routes are matched against. Repeated slashes are collapsed.
+     *
+     * @return string
+     */
+    public function path(): string {
+        $path = explode('?', $_SERVER['REQUEST_URI'] ?? '/', 2)[0];
+        if ($path === '' || $path[0] !== '/') {
+            // Absolute-form request target (http://host/path)
+            $path = parse_url($path, PHP_URL_PATH) ?: '/';
+        }
+        return preg_replace('#/{2,}#', '/', $path);
+    }
+
+    /**
      * Retrieve a specific HTTP request header.
      *
      * @param string $key Header name
      * @return string|null
      */
     public function header(string $key): ?string {
-        $header = 'HTTP_' . strtoupper(str_replace('-', '_', $key));
-        return $_SERVER[$header] ?? null;
+        $name = strtoupper(str_replace('-', '_', $key));
+        $candidates = ['HTTP_' . $name];
+        if ($name === 'CONTENT_TYPE' || $name === 'CONTENT_LENGTH') {
+            // CGI passes these without the HTTP_ prefix
+            $candidates[] = $name;
+        }
+        if ($name === 'AUTHORIZATION') {
+            // Set by a rewrite rule on Apache CGI/FastCGI setups
+            $candidates[] = 'REDIRECT_HTTP_AUTHORIZATION';
+        }
+        foreach ($candidates as $candidate) {
+            if (isset($_SERVER[$candidate]) && is_string($_SERVER[$candidate]) && $_SERVER[$candidate] !== '') {
+                return $_SERVER[$candidate];
+            }
+        }
+        return null;
     }
 
     /**
@@ -521,6 +655,11 @@ class Request {
                 $headers[$header] = $value;
             }
         }
+        foreach (['Content-Type', 'Content-Length', 'Authorization'] as $header) {
+            if (!isset($headers[$header]) && $this->header($header) !== null) {
+                $headers[$header] = $this->header($header);
+            }
+        }
         return $headers;
     }
 
@@ -531,7 +670,7 @@ class Request {
      * @return string|null
      */
     public function cookie(string $key): ?string {
-        return $_COOKIE[$key] ?? null;
+        return self::stringOrNull($_COOKIE[$key] ?? null);
     }
 
     /**
@@ -567,12 +706,12 @@ class Request {
      *
      * @param bool $decode Whether to decode JSON. If false, returns raw input.
      * @param bool $associative Whether to return an associative array or object
-     * @return array|string|null
+     * @return mixed Decoded JSON (null if the body is not valid JSON), or the raw body
      */
-    public function input(bool $decode = true, $associative = true) {
+    public function input(bool $decode = true, bool $associative = true) {
         $input = file_get_contents('php://input');
         if ($decode) {
-            return json_decode(json: $input, associative: $associative);
+            return json_decode($input, $associative);
         } else {
             return $input;
         }
@@ -582,10 +721,10 @@ class Request {
      * Retrieve a specific GET parameter.
      *
      * @param string $key Parameter name
-     * @return string|null
+     * @return string|null Null if the parameter is missing or is an array (?key[]=)
      */
     public function getParam(string $key): ?string {
-        return $_GET[$key] ?? null;
+        return self::stringOrNull($_GET[$key] ?? null);
     }
 
     /**
@@ -601,10 +740,10 @@ class Request {
      * Retrieve a specific POST parameter.
      *
      * @param string $key Parameter name
-     * @return string|null
+     * @return string|null Null if the parameter is missing or is an array (key[]=)
      */
     public function postParam(string $key): ?string {
-        return $_POST[$key] ?? null;
+        return self::stringOrNull($_POST[$key] ?? null);
     }
 
     /**
@@ -633,6 +772,16 @@ class Request {
     public function userAgent(): ?string {
         return $_SERVER['HTTP_USER_AGENT'] ?? null;
     }
+
+    /**
+     * PHP parses key[]=value into an array, the single-value getters only return strings.
+     *
+     * @param mixed $value
+     * @return string|null
+     */
+    private static function stringOrNull($value): ?string {
+        return is_string($value) ? $value : null;
+    }
 }
 
 /**
@@ -640,7 +789,6 @@ class Request {
  */
 class Response {
     private $headers = ['Content-Type' => 'application/json'];
-    private $statusCode = 200;
 
     /**
      * Set a single HTTP response header.
@@ -700,25 +848,56 @@ class Response {
      * @return self
      */
     public function statusCode(int $code): self {
-        $this->statusCode = $code;
-        http_response_code($code);
+        if (!headers_sent()) {
+            http_response_code($code);
+        }
         return $this;
     }
 
     /**
-     * Send the response to the client.
+     * Send the response headers without a body.
      *
-     * @param mixed $content Content to send (array or string)
-     * @param bool $json Whether to JSON-encode the content if it's an array
+     * echo() does this for you, it is only needed when you write the body yourself.
+     *
+     * @return self
      */
-    public function echo($content, $json = true) {
-        foreach ($this->headers as $key => $value) {
-            header("$key: $value");
+    public function sendHeaders(): self {
+        if (!headers_sent()) {
+            foreach ($this->headers as $key => $value) {
+                header("$key: $value");
+            }
         }
-        if (is_string($content) && $json) {
-            $content = ['echo' => $content];
+        return $this;
+    }
+
+    /**
+     * Send the response to the client and end the script.
+     *
+     * Arrays and objects are always sent as JSON, null sends an empty body.
+     * With $json enabled, a string is wrapped as {"echo": "..."} and other
+     * values (numbers, booleans) are JSON-encoded. With $json disabled,
+     * strings and other scalar values are sent as they are.
+     *
+     * @param mixed $content Content to send
+     * @param bool $json Whether to send strings and other scalar values as JSON
+     * @throws JsonException If the content cannot be encoded
+     */
+    public function echo($content = null, bool $json = true) {
+        if ($content === null) {
+            $body = '';
+        } elseif (is_scalar($content) && !$json) {
+            $body = (string) $content;
+        } else {
+            if (is_string($content)) {
+                $content = ['echo' => $content];
+            }
+            $body = json_encode($content, JSON_INVALID_UTF8_SUBSTITUTE | JSON_THROW_ON_ERROR);
         }
-        echo is_array($content) ? json_encode($content) : $content;
+
+        $this->sendHeaders();
+        if (($_SERVER['REQUEST_METHOD'] ?? '') !== 'HEAD') {
+            echo $body;
+        }
         exit;
     }
 }

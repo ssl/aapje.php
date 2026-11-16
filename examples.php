@@ -1,18 +1,29 @@
 <?php
 /**
  * aapje.php Examples
- * 
+ *
  * This is an example file demonstrating how you can use aapje.php.
- * It covers routing, middleware, CORS, database operations, helper functions, 
+ * It covers routing, middleware, CORS, database operations, helper functions,
  * setting custom headers, handling different content types, and more.
  *
  * Ensure that `aapje.php` is in the same directory or adjust the path accordingly.
+ *
+ * The database examples expect a table like this:
+ *
+ *   CREATE TABLE users (
+ *       id INT AUTO_INCREMENT PRIMARY KEY,
+ *       name VARCHAR(255) NOT NULL,
+ *       email VARCHAR(255) NOT NULL UNIQUE,
+ *       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+ *   );
  */
 
 require 'aapje.php';
 
 // Global Configuration
 aapje::setConfig([
+    // Set to true while developing to see exception messages in 500 responses
+    'debug' => false,
     'database' => [
         'host' => '127.0.0.1',
         'dbname' => 'aapje_1',
@@ -34,29 +45,55 @@ aapje::setConfig([
 // Register Middleware
 // Example: Logging Middleware
 function loggingMiddleware($request, $response) {
-    $method = $_SERVER['REQUEST_METHOD'];
-    $uri = $_SERVER['REQUEST_URI'];
+    $method = $request->method();
+    $path = $request->path();
     $ip = $request->ip();
-    error_log("[$method] $uri from $ip");
+    error_log("[$method] $path from $ip");
 }
 
 aapje::middleware('loggingMiddleware');
 
 // Example: Authentication Middleware
+// Replace the token with your own secret, and keep it out of your code (use an environment variable)
 function authMiddleware($request, $response) {
-    $authHeader = $request->header('Authorization');
-    if ($authHeader !== 'Bearer exampletoken') {
+    $authHeader = $request->header('Authorization') ?? '';
+    if (!hash_equals('Bearer exampletoken', $authHeader)) {
         $response->statusCode(401)->echo(['error' => 'Unauthorized']);
     }
 }
 
 aapje::middleware('authMiddleware');
 
+/**
+ * Store an uploaded file and return its new name, or null if it was refused.
+ *
+ * Uploaded files are untrusted: never keep the name the client sent and never
+ * store them where the web server will execute them. This saves them in a
+ * directory next to (not inside) the web root, under a random name, and only
+ * accepts a fixed list of extensions.
+ */
+function storeUpload(array $file): ?string {
+    $allowedExtensions = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'txt'];
+    $extension = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+
+    if ($file['error'] !== UPLOAD_ERR_OK || !in_array($extension, $allowedExtensions, true)) {
+        return null;
+    }
+
+    $uploadDir = dirname(__DIR__) . '/uploads/';
+    if (!is_dir($uploadDir)) {
+        mkdir($uploadDir, 0755, true);
+    }
+
+    $name = bin2hex(random_bytes(16)) . '.' . $extension;
+    return move_uploaded_file($file['tmp_name'], $uploadDir . $name) ? $name : null;
+}
+
 // Routes
 
 /**
  * 1. Home Route
- * 
+ *
  * Responds to all HTTP methods.
  */
 aapje::route('*', '/', function () {
@@ -65,11 +102,13 @@ aapje::route('*', '/', function () {
 
 /**
  * 2. Get All Users
- * 
+ *
  * Retrieves all users from the 'users' table.
+ * Select the columns you want to expose instead of '*', so a column added
+ * later (like a password hash) does not end up in the response.
  */
 aapje::route('GET', '/users', function () {
-    $users = aapje::selectAll('users', '*', [], [
+    $users = aapje::selectAll('users', ['id', 'name', 'email'], [], [
         'orderBy' => 'id',
         'sort' => 'ASC',
         'limit' => 100
@@ -79,7 +118,7 @@ aapje::route('GET', '/users', function () {
 
 /**
  * 3. Get User Emails
- * 
+ *
  * Retrieves only 'id' and 'email' fields for all users.
  */
 aapje::route('GET', '/users/emails', function () {
@@ -91,12 +130,29 @@ aapje::route('GET', '/users/emails', function () {
 });
 
 /**
- * 4. Get User by ID
- * 
+ * 4. Get Users Page by Page
+ *
+ * Retrieves 5 users per page, newest first, using 'limit' and 'offset'.
+ * Example: /users/page/2
+ */
+aapje::route('GET', '/users/page/@page', function ($page) {
+    $page = max(1, (int) $page);
+    $users = aapje::selectAll('users', ['id', 'name', 'email'], [], [
+        'orderBy' => 'id',
+        'sort' => 'DESC',
+        'limit' => 5,
+        'offset' => ($page - 1) * 5
+    ]);
+    aapje::response()->echo($users);
+});
+
+/**
+ * 5. Get User by ID
+ *
  * Retrieves a single user based on the provided ID.
  */
 aapje::route('GET', '/user/@id', function ($id) {
-    $user = aapje::select('users', '*', ['id' => $id]);
+    $user = aapje::select('users', ['id', 'name', 'email'], ['id' => $id]);
     if ($user) {
         aapje::response()->echo($user);
     } else {
@@ -105,22 +161,8 @@ aapje::route('GET', '/user/@id', function ($id) {
 });
 
 /**
- * 5. Get Last 5 Users Ordered by ID
- * 
- * Retrieves the last 5 users ordered in descending order by ID.
- */
-aapje::route('GET', '/users/last5', function () {
-    $users = aapje::selectAll('users', '*', [], [
-        'orderBy' => 'id',
-        'sort' => 'DESC',
-        'limit' => 5
-    ]);
-    aapje::response()->echo($users);
-});
-
-/**
  * 6. Create a New User
- * 
+ *
  * Creates a new user with 'name' and 'email'.
  */
 aapje::route('POST', '/users', function () {
@@ -133,31 +175,31 @@ aapje::route('POST', '/users', function () {
     ];
 
     // Check for required fields
-    if (!$data['email'] || !$data['name']) {
+    if (!is_string($data['email']) || !is_string($data['name']) || $data['email'] === '' || $data['name'] === '') {
         aapje::response()->statusCode(400)->echo(['error' => 'Email and name are required']);
     }
 
     try {
         $id = aapje::insert('users', $data);
         aapje::response()->statusCode(201)->echo(['created_user_id' => $id]);
-    } catch (Exception $e) {
+    } catch (PDOException $e) {
+        // Log the details, do not send the database message to the client
+        error_log($e->getMessage());
         aapje::response()->statusCode(500)->echo(['error' => 'Failed to create user']);
     }
 });
 
 /**
  * 7. Update a User
- * 
+ *
  * Updates the 'name' and/or 'email' of a user based on ID.
  */
 aapje::route('PUT', '/users/@id', function ($id) {
-    $user = aapje::select('users', '*', ['id' => $id]);
-
-    if (!$user) {
-        aapje::response()->statusCode(404)->echo(['error' => 'User not found']);
-    }
-
     $input = aapje::request()->input();
+
+    if (!is_array($input)) {
+        aapje::response()->statusCode(400)->echo(['error' => 'Invalid JSON body']);
+    }
 
     // Warning: Directly passing user $input to $data can introduce security issues
     // Bad practice:
@@ -168,237 +210,59 @@ aapje::route('PUT', '/users/@id', function ($id) {
 
     // Instead, only allow specific fields to be updated
     $allowedFields = ['email', 'name'];
-    $data = array_intersect_key($input, array_flip($allowedFields));
+    $data = array_filter(array_intersect_key($input, array_flip($allowedFields)), 'is_string');
 
     if (empty($data)) {
         aapje::response()->statusCode(400)->echo(['error' => 'No valid fields to update']);
     }
 
+    if (!aapje::select('users', ['id'], ['id' => $id])) {
+        aapje::response()->statusCode(404)->echo(['error' => 'User not found']);
+    }
+
     try {
         aapje::update('users', $data, ['id' => $id]);
         aapje::response()->echo(['updated_user_id' => $id]);
-    } catch (Exception $e) {
+    } catch (PDOException $e) {
+        error_log($e->getMessage());
         aapje::response()->statusCode(500)->echo(['error' => 'Failed to update user']);
     }
 });
 
 /**
  * 8. Delete a User
- * 
- * Deletes a user based on the provided ID. Requires authentication.
+ *
+ * Deletes a user based on the provided ID.
+ * delete() returns the number of deleted rows.
  */
 aapje::route('DELETE', '/users/@id', function ($id) {
     try {
-        aapje::delete('users', ['id' => $id]);
-        aapje::response()->echo(['deleted_user_id' => $id]);
-    } catch (Exception $e) {
+        $deleted = aapje::delete('users', ['id' => $id]);
+    } catch (PDOException $e) {
+        error_log($e->getMessage());
         aapje::response()->statusCode(500)->echo(['error' => 'Failed to delete user']);
     }
+
+    if ($deleted === 0) {
+        aapje::response()->statusCode(404)->echo(['error' => 'User not found']);
+    }
+    aapje::response()->echo(['deleted_user_id' => $id]);
 });
 
 /**
  * 9. Search Users
- * 
- * Searches for users based on 'name' and/or 'email' criteria.
+ *
+ * Searches for users based on 'name' and/or 'email' criteria,
+ * with sorting and limiting of the results.
  */
 aapje::route('POST', '/users/search', function () {
     $input = aapje::request()->input();
     $conditions = [];
 
-    if (!empty($input['name'])) {
+    if (!empty($input['name']) && is_string($input['name'])) {
         $conditions['name'] = $input['name'];
     }
-    if (!empty($input['email'])) {
-        $conditions['email'] = $input['email'];
-    }
-
-    if (empty($conditions)) {
-        aapje::response()->statusCode(400)->echo(['error' => 'Please provide search criteria']);
-    }
-
-    try {
-        $results = aapje::selectAll('users', ['id', 'name', 'email'], $conditions, [
-            'orderBy' => 'name',
-            'sort' => 'ASC',
-            'limit' => 20
-        ]);
-        aapje::response()->echo($results);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Search failed']);
-    }
-});
-
-/**
- * 10. Upload a Single File
- * 
- * Handles file uploads and stores them in the 'uploads' directory.
- */
-aapje::route('POST', '/users/upload', function () {
-    $file = aapje::request()->file('file');
-    if ($file && $file['error'] === UPLOAD_ERR_OK) {
-        $uploadDir = __DIR__ . '/uploads/';
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0755, true);
-        }
-        $filePath = $uploadDir . basename($file['name']);
-        if (move_uploaded_file($file['tmp_name'], $filePath)) {
-            aapje::response()->echo(['uploaded_file' => $file['name']]);
-        } else {
-            aapje::response()->statusCode(500)->echo(['error' => 'Failed to move uploaded file']);
-        }
-    } else {
-        aapje::response()->statusCode(400)->echo(['error' => 'No file uploaded or upload error']);
-    }
-});
-
-/**
- * 11. Set Content-Type to HTML and Echo an HTML Page
- * 
- * Demonstrates setting custom headers and handling different content types.
- */
-aapje::route('GET', '/html', function () {
-    aapje::response()->header('Content-Type', 'text/html')->echo('<h1>Hello, world!</h1>');
-});
-
-/**
- * 12. Get All Request Headers
- * 
- * Retrieves and returns all HTTP request headers.
- */
-aapje::route('GET', '/headers', function () {
-    $headers = aapje::request()->headers();
-    aapje::response()->echo($headers);
-});
-
-/**
- * 13. Get All Cookies
- * 
- * Retrieves and returns all cookies sent with the request.
- */
-aapje::route('GET', '/cookies', function () {
-    $cookies = aapje::request()->cookies();
-    aapje::response()->echo($cookies);
-});
-
-/**
- * 14. Get All GET Parameters
- * 
- * Retrieves and returns all GET parameters from the request.
- */
-aapje::route('GET', '/get-params', function () {
-    $params = aapje::request()->getParams();
-    aapje::response()->echo($params);
-});
-
-/**
- * 15. Get All POST Parameters
- * 
- * Retrieves and returns all POST parameters from the request.
- */
-aapje::route('POST', '/post-params', function () {
-    $params = aapje::request()->postParams();
-    aapje::response()->echo($params);
-});
-
-/**
- * 16. Get Client IP and User Agent
- * 
- * Retrieves and returns the client's IP address and User-Agent string.
- */
-aapje::route('GET', '/client-info', function () {
-    $ip = aapje::request()->ip();
-    $userAgent = aapje::request()->userAgent();
-    aapje::response()->echo(['ip' => $ip, 'user_agent' => $userAgent]);
-});
-
-/**
- * 17. Set a Cookie
- * 
- * Sets a cookie named 'example_cookie' with a value and options.
- */
-aapje::route('GET', '/set-cookie', function () {
-    aapje::response()->cookie('example_cookie', 'cookie_value', [
-        'expires' => time() + 3600, // 1 hour
-        'path' => '/',
-        'httponly' => true,
-    ])->echo(['message' => 'Cookie set']);
-});
-
-/**
- * 18. Upload Multiple Files
- * 
- * Handles multiple file uploads and stores them in the 'uploads' directory.
- */
-aapje::route('POST', '/upload-files', function () {
-    $files = aapje::request()->files();
-    $uploadedFiles = [];
-    $uploadDir = __DIR__ . '/uploads/';
-
-    if (!is_dir($uploadDir)) {
-        mkdir($uploadDir, 0755, true);
-    }
-
-    foreach ($files as $file) {
-        if ($file['error'] === UPLOAD_ERR_OK) {
-            $filePath = $uploadDir . basename($file['name']);
-            if (move_uploaded_file($file['tmp_name'], $filePath)) {
-                $uploadedFiles[] = $file['name'];
-            }
-        }
-    }
-
-    if (!empty($uploadedFiles)) {
-        aapje::response()->echo(['uploaded_files' => $uploadedFiles]);
-    } else {
-        aapje::response()->statusCode(400)->echo(['error' => 'No files uploaded']);
-    }
-});
-
-/**
- * 19. Use Helper Functions: getFile and putFile
- * 
- * Demonstrates using helper functions to read from and write to files.
- */
-aapje::route('GET', '/file/read', function () {
-    $filePath = __DIR__ . '/sample.txt';
-    if (file_exists($filePath)) {
-        $content = Helpers::getFile($filePath);
-        aapje::response()->echo(['file_content' => $content]);
-    } else {
-        aapje::response()->statusCode(404)->echo(['error' => 'File not found']);
-    }
-});
-
-aapje::route('POST', '/file/write', function () {
-    $input = aapje::request()->input();
-    $content = $input['content'] ?? '';
-
-    if (empty($content)) {
-        aapje::response()->statusCode(400)->echo(['error' => 'No content provided']);
-    }
-
-    $filePath = __DIR__ . '/sample.txt';
-    try {
-        Helpers::putFile($filePath, $content);
-        aapje::response()->echo(['message' => 'File written successfully']);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Failed to write file']);
-    }
-});
-
-/**
- * 20. Advanced Database Query: Search with Sorting and Limiting
- * 
- * Searches users by name or email with sorting and limiting the results.
- */
-aapje::route('POST', '/users/advanced-search', function () {
-    $input = aapje::request()->input();
-    $conditions = [];
-
-    if (!empty($input['name'])) {
-        $conditions['name'] = $input['name'];
-    }
-    if (!empty($input['email'])) {
+    if (!empty($input['email']) && is_string($input['email'])) {
         $conditions['email'] = $input['email'];
     }
 
@@ -410,87 +274,174 @@ aapje::route('POST', '/users/advanced-search', function () {
         $results = aapje::selectAll('users', ['id', 'name', 'email'], $conditions, [
             'orderBy' => 'created_at',
             'sort' => 'DESC',
-            'limit' => 10
+            'limit' => 20
         ]);
         aapje::response()->echo($results);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Advanced search failed']);
+    } catch (PDOException $e) {
+        error_log($e->getMessage());
+        aapje::response()->statusCode(500)->echo(['error' => 'Search failed']);
     }
 });
 
 /**
- * 21. Set Multiple Custom Headers
- * 
- * Demonstrates setting multiple custom headers in the response.
+ * 10. Raw SQL Query
+ *
+ * Uses query() for anything the helper methods cannot express.
+ * Always pass values as parameters, never put them in the SQL string.
  */
-aapje::route('GET', '/custom-headers', function () {
-    aapje::response()->headers([
-        'X-Custom-Header-1' => 'Value1',
-        'X-Custom-Header-2' => 'Value2',
-    ])->echo(['message' => 'Custom headers set']);
+aapje::route('GET', '/users/find', function () {
+    $search = aapje::request()->getParam('q');
+
+    if ($search === null || $search === '') {
+        aapje::response()->statusCode(400)->echo(['error' => 'Please provide a search term']);
+    }
+
+    $users = aapje::query(
+        'SELECT id, name, email FROM users WHERE name LIKE ? OR email LIKE ? ORDER BY name LIMIT 20',
+        ["%$search%", "%$search%"]
+    )->fetchAll();
+    aapje::response()->echo($users);
 });
 
 /**
- * 22. Handle Different Content Types
- * 
- * Responds with XML content type and returns data in XML format.
+ * 11. Upload a Single File
+ *
+ * Handles a file upload and responds with a custom header.
+ * See storeUpload() at the top of this file for how the file is stored.
  */
-aapje::route('GET', '/data/xml', function () {
-    $data = [
-        'users' => [
-            ['id' => 1, 'name' => 'Alice'],
-            ['id' => 2, 'name' => 'Bob'],
-        ]
-    ];
+aapje::route('POST', '/upload', function () {
+    $file = aapje::request()->file('file');
 
-    // Convert array to XML
-    $xml = new SimpleXMLElement('<response/>');
-    array_walk_recursive($data, function($value, $key) use ($xml){
-        $xml->addChild($key, $value);
-    });
-    $xmlContent = $xml->asXML();
+    if (!$file || is_array($file['name'])) {
+        aapje::response()->statusCode(400)->echo(['error' => 'No file uploaded']);
+    }
 
-    aapje::response()->header('Content-Type', 'application/xml')->echo($xmlContent, false);
+    $name = storeUpload($file);
+    if ($name === null) {
+        aapje::response()->statusCode(400)->echo(['error' => 'Upload failed or file type not allowed']);
+    }
+    aapje::response()->header('X-Upload-Status', 'Success')->echo(['uploaded_file' => $name]);
 });
 
 /**
- * 23. Utilize Helper Function: esc()
- * 
- * Demonstrates using the 'esc' helper function to escape HTML.
+ * 12. Upload Multiple Files
+ *
+ * Handles multiple file uploads sent as files[].
  */
-aapje::route('GET', '/escape-html', function () {
-    $unsafeString = '<script>alert("XSS")</script>';
-    $safeString = Helpers::esc($unsafeString);
-    aapje::response()->echo(['escaped_string' => $safeString]);
+aapje::route('POST', '/upload-files', function () {
+    $files = aapje::request()->file('files');
+    $uploadedFiles = [];
+
+    if (!$files || !is_array($files['name'])) {
+        aapje::response()->statusCode(400)->echo(['error' => 'No files uploaded']);
+    }
+
+    // PHP groups files[] per field (name, tmp_name, error), not per file
+    foreach (array_keys($files['name']) as $i) {
+        $name = storeUpload([
+            'name' => $files['name'][$i],
+            'tmp_name' => $files['tmp_name'][$i],
+            'error' => $files['error'][$i],
+        ]);
+        if ($name !== null) {
+            $uploadedFiles[] = $name;
+        }
+    }
+
+    if (!empty($uploadedFiles)) {
+        aapje::response()->echo(['uploaded_files' => $uploadedFiles]);
+    } else {
+        aapje::response()->statusCode(400)->echo(['error' => 'No files uploaded']);
+    }
 });
 
 /**
- * 24. Get Client Info and Set a Cookie
- * 
- * Retrieves client IP and User-Agent, sets a cookie, and returns the information.
+ * 13. Echo an HTML Page
+ *
+ * Sets the Content-Type to HTML and sends the content as it is (second argument false).
+ * Anything that comes from the request has to be escaped with Helpers::esc().
+ * Example: /html?name=aapje
  */
-aapje::route('GET', '/client-info-cookie', function () {
+aapje::route('GET', '/html', function () {
+    $name = aapje::request()->getParam('name') ?? 'world';
+    aapje::response()
+        ->header('Content-Type', 'text/html; charset=utf-8')
+        ->echo('<h1>Hello, ' . Helpers::esc($name) . '!</h1>', false);
+});
+
+/**
+ * 14. Get All Request Headers
+ *
+ * Retrieves and returns all HTTP request headers.
+ */
+aapje::route('GET', '/headers', function () {
+    $headers = aapje::request()->headers();
+    aapje::response()->echo($headers);
+});
+
+/**
+ * 15. Get All Cookies
+ *
+ * Retrieves and returns all cookies sent with the request.
+ */
+aapje::route('GET', '/cookies', function () {
+    $cookies = aapje::request()->cookies();
+    aapje::response()->echo($cookies);
+});
+
+/**
+ * 16. Get All GET Parameters
+ *
+ * Retrieves and returns all GET parameters from the request.
+ */
+aapje::route('GET', '/get-params', function () {
+    $params = aapje::request()->getParams();
+    aapje::response()->echo($params);
+});
+
+/**
+ * 17. Get All POST Parameters
+ *
+ * Retrieves and returns all POST parameters from the request.
+ */
+aapje::route('POST', '/post-params', function () {
+    $params = aapje::request()->postParams();
+    aapje::response()->echo($params);
+});
+
+/**
+ * 18. Get Client IP and User Agent
+ *
+ * Retrieves and returns the client's IP address and User-Agent string.
+ */
+aapje::route('GET', '/client-info', function () {
     $ip = aapje::request()->ip();
     $userAgent = aapje::request()->userAgent();
-
-    aapje::response()->cookie('client_ip', $ip, [
-        'expires' => time() + 86400, // 1 day
-        'path' => '/',
-        'httponly' => true,
-    ])->echo([
-        'ip' => $ip,
-        'user_agent' => $userAgent,
-        'message' => 'Client IP has been set as a cookie'
-    ]);
+    aapje::response()->echo(['ip' => $ip, 'user_agent' => $userAgent]);
 });
 
 /**
- * 25. Read and Write Files Using Helper Functions
- * 
- * Demonstrates reading from and writing to files using helper functions.
+ * 19. Set a Cookie
+ *
+ * Sets a cookie named 'example_cookie' with a value and options.
+ */
+aapje::route('GET', '/set-cookie', function () {
+    aapje::response()->cookie('example_cookie', 'cookie_value', [
+        'expires' => time() + 3600, // 1 hour
+        'path' => '/',
+        'httponly' => true,
+        'samesite' => 'Lax',
+    ])->echo(['message' => 'Cookie set']);
+});
+
+/**
+ * 20. Use Helper Functions: getFile and putFile
+ *
+ * Demonstrates using helper functions to read from and write to files.
+ * Both throw an Exception when the file cannot be read or written.
  */
 aapje::route('GET', '/file/read', function () {
-    $filePath = __DIR__ . '/data.txt';
+    $filePath = __DIR__ . '/sample.txt';
     if (file_exists($filePath)) {
         $content = Helpers::getFile($filePath);
         aapje::response()->echo(['file_content' => $content]);
@@ -503,118 +454,64 @@ aapje::route('POST', '/file/write', function () {
     $input = aapje::request()->input();
     $content = $input['content'] ?? '';
 
-    if (empty($content)) {
+    if (!is_string($content) || $content === '') {
         aapje::response()->statusCode(400)->echo(['error' => 'No content provided']);
     }
 
-    $filePath = __DIR__ . '/data.txt';
+    $filePath = __DIR__ . '/sample.txt';
     try {
         Helpers::putFile($filePath, $content);
-        aapje::response()->echo(['message' => 'File written successfully']);
     } catch (Exception $e) {
         aapje::response()->statusCode(500)->echo(['error' => 'Failed to write file']);
     }
+    aapje::response()->echo(['message' => 'File written successfully']);
 });
 
 /**
- * 26. Upload a File and Respond with Custom Header
- * 
- * Uploads a file and sets a custom header in the response.
+ * 21. Set Multiple Custom Headers
+ *
+ * Demonstrates setting multiple custom headers in the response.
  */
-aapje::route('POST', '/upload-with-header', function () {
-    $file = aapje::request()->file('file');
-    if ($file && $file['error'] === UPLOAD_ERR_OK) {
-        $uploadDir = __DIR__ . '/uploads/';
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0755, true);
-        }
-        $filePath = $uploadDir . basename($file['name']);
-        if (move_uploaded_file($file['tmp_name'], $filePath)) {
-            aapje::response()->header('X-Upload-Status', 'Success')->echo(['uploaded_file' => $file['name']]);
-        } else {
-            aapje::response()->statusCode(500)->echo(['error' => 'Failed to move uploaded file']);
-        }
-    } else {
-        aapje::response()->statusCode(400)->echo(['error' => 'No file uploaded or upload error']);
-    }
+aapje::route('GET', '/custom-headers', function () {
+    aapje::response()->headers([
+        'X-Custom-Header-1' => 'Value1',
+        'X-Custom-Header-2' => 'Value2',
+    ])->echo(['message' => 'Custom headers set']);
 });
 
 /**
- * 27. Advanced Database Insertion with Error Handling
- * 
- * Inserts a new user and handles potential database errors gracefully.
+ * 22. Handle Different Content Types
+ *
+ * Responds with XML, plain text and JSON.
  */
-aapje::route('POST', '/users/advanced-create', function () {
-    $input = aapje::request()->input();
-
-    // Validate input fields
-    $data = [
-        'email' => $input['email'] ?? null,
-        'name'  => $input['name'] ?? null,
+aapje::route('GET', '/data/xml', function () {
+    $users = [
+        ['id' => 1, 'name' => 'Alice'],
+        ['id' => 2, 'name' => 'Bob'],
     ];
 
-    // Check for required fields
-    if (!$data['email'] || !$data['name']) {
-        aapje::response()->statusCode(400)->echo(['error' => 'Email and name are required']);
+    // Convert array to XML
+    $xml = new SimpleXMLElement('<response/>');
+    foreach ($users as $user) {
+        $node = $xml->addChild('user');
+        $node->addChild('id', (string) $user['id']);
+        $node->addChild('name', Helpers::esc($user['name']));
     }
 
-    try {
-        $id = aapje::insert('users', $data);
-        aapje::response()->statusCode(201)->echo(['created_user_id' => $id]);
-    } catch (PDOException $e) {
-        // Handle duplicate entry or other database-specific errors
-        aapje::response()->statusCode(500)->echo(['error' => 'Database error: ' . $e->getMessage()]);
-    }
+    aapje::response()->header('Content-Type', 'application/xml')->echo($xml->asXML(), false);
 });
 
-/**
- * 28. Use Helper Function: getFile and putFile
- * 
- * Demonstrates reading from and writing to files using helper functions.
- */
-aapje::route('GET', '/files/read', function () {
-    $filePath = __DIR__ . '/example.txt';
-    if (file_exists($filePath)) {
-        $content = Helpers::getFile($filePath);
-        aapje::response()->echo(['file_content' => $content]);
-    } else {
-        aapje::response()->statusCode(404)->echo(['error' => 'File not found']);
-    }
-});
-
-aapje::route('POST', '/files/write', function () {
-    $input = aapje::request()->input();
-    $content = $input['content'] ?? '';
-
-    if (empty($content)) {
-        aapje::response()->statusCode(400)->echo(['error' => 'No content provided']);
-    }
-
-    $filePath = __DIR__ . '/example.txt';
-    try {
-        Helpers::putFile($filePath, $content);
-        aapje::response()->echo(['message' => 'File written successfully']);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Failed to write file']);
-    }
-});
-
-/**
- * 29. Respond with Different Content Types
- * 
- * Demonstrates responding with plain text and JSON.
- */
 aapje::route('GET', '/text', function () {
     aapje::response()->header('Content-Type', 'text/plain')->echo('This is plain text content.', false);
 });
 
 aapje::route('GET', '/json', function () {
-    aapje::response()->header('Content-Type', 'application/json')->echo(['message' => 'This is JSON content.']);
+    aapje::response()->echo(['message' => 'This is JSON content.']);
 });
 
 /**
- * 30. Redirect to Another URL
- * 
+ * 23. Redirect to Another URL
+ *
  * Demonstrates how to redirect the client to another URL.
  */
 aapje::route('GET', '/redirect', function () {

@@ -1,71 +1,168 @@
 # aapje.php
 
-**aapje.php** is a lightweight, single-file PHP framework designed for building simple and efficient APIs. It offers essential features such as routing, database interactions, middleware support, CORS handling, and utility helper functions, all while maintaining a minimalistic and easy-to-use structure.
+A PHP framework for small JSON APIs that fits in one file. It does routing, middleware, CORS and has a thin PDO wrapper for MySQL. There is nothing to install and nothing to build: copy `aapje.php` next to your code and require it.
 
-<p align="center">
+<p>
   <img src="https://img.shields.io/github/release/ssl/aapje.php?style=flat">
-  <img src="https://img.shields.io/github/issues/ssl/aapje.php?style=flat">
-  <img src="https://img.shields.io/github/forks/ssl/aapje.php?style=flat">
-  <img src="https://img.shields.io/github/stars/ssl/aapje.php?style=flat">
   <img src="https://img.shields.io/github/license/ssl/aapje.php?style=flat">
-  <br><br>
-  <b>⚠️ aapje.php is currently in beta. bugs or other issues can be expected. do not use in production. ⚠️</b>
 </p>
 
-## 🚀 Features
+## Quick start
 
-- **Routing:** Define routes with dynamic parameters supporting various HTTP methods.
-- **Database Integration:** Simplified PDO-based database interactions with CRUD operations.
-- **Middleware Support:** Execute custom logic before or after route handling.
-- **CORS Support:** Built-in Cross-Origin Resource Sharing configuration for secure API access.
-- **Helpers Class:** Utility functions to streamline common tasks.
-- **Single-File Architecture:** Easy setup and deployment without external dependencies.
+```php
+<?php
+require 'aapje.php';
 
-## 📦 Installation
+aapje::route('GET', '/', function () {
+    aapje::response()->echo(['hello' => 'world']);
+});
 
-1. **Download `aapje.php`**
+aapje::route('GET', '/user/@id', function ($id) {
+    aapje::response()->echo(['id' => $id]);
+});
 
-2. **Include in Your Project:**
+aapje::run();
+```
 
-   Place `aapje.php` in your project directory and include it in your PHP scripts.
+Save that as `index.php` and try it with PHP's built-in server:
 
-   ```php
-   <?php
-   require 'aapje.php';
-   ```
+```bash
+php -S localhost:8000 index.php
+```
 
-3. **Web Server Configuration:**
+```bash
+curl localhost:8000/user/42
+```
 
-   Ensure that all requests to your website (or specific folder) using `aapje.php` are passed through your routing file.
+## Install
 
-   ```apache
-   # Example Apache .htaccess file
-   RewriteEngine On
-   RewriteRule ^(.*)$ index.php [L]
-   ```
+You need PHP 8.0 or newer, and the `pdo_mysql` extension if you use the database methods.
 
-Alternatively, you can fork or clone this repository, sync it to a web host, and directly start coding your API inside the `index.php` file.
+Download [`aapje.php`](https://github.com/ssl/aapje.php/blob/main/aapje.php), put it in your project and `require` it. Then make your web server send every request to the file that calls `aapje::run()`.
 
-## 🛠️ Configuration
+Apache: use the [`.htaccess`](https://github.com/ssl/aapje.php/blob/main/.htaccess) from this repo. It rewrites everything to `index.php`, passes the `Authorization` header on to PHP and leaves ACME challenges alone.
 
-Configuration is optional and **aapje.php** can operate without a database. CORS is disabled by default. When enabling CORS by setting `'enabled'` to `true`, the `origins`, `headers`, and `methods` will default to `'*'` unless explicitly specified.
+nginx with PHP-FPM (adjust the socket path to your setup):
 
-Configure **aapje.php** using the `setConfig` method. You can set database credentials, CORS settings, and default headers.
+```nginx
+location / {
+    include fastcgi_params;
+    fastcgi_param SCRIPT_FILENAME $document_root/index.php;
+    fastcgi_pass unix:/run/php/php-fpm.sock;
+}
+```
+
+You can also clone the repo onto a host and write your API straight into `index.php`.
+
+## Routes
+
+```php
+aapje::route($method, $pattern, $callback);
+```
+
+`$method` is an HTTP method, or `*` for all of them. A `HEAD` request uses the `GET` route when there is no `HEAD` route of its own.
+
+`@name` in a pattern matches one path segment, URL-decoded. If the callback has an argument for every name, the values are passed by name and the order of the arguments does not matter. Otherwise they are passed in the order they appear in the pattern.
+
+```php
+aapje::route('GET', '/post/@slug/comment/@n', function ($n, $slug) {
+    // GET /post/hello/comment/7  ->  $slug = 'hello', $n = '7'
+});
+```
+
+The rest of the pattern is used as a regular expression, anchored at both ends. That means you can write your own groups, and it also means a `.` matches any character unless you escape it.
+
+Routes are tried in the order you registered them and the first match wins. If no route matches the path you get a JSON 404. If the path matches but the method does not, you get a 405 with an `Allow` header.
+
+Call `aapje::run()` once, after all routes and middleware are registered.
+
+## Request
+
+`aapje::request()` returns the request object.
+
+| Method | Returns |
+| --- | --- |
+| `method()` | The HTTP method, in upper case |
+| `path()` | The path routes are matched against: no query string, repeated slashes collapsed |
+| `input()` | The request body decoded as JSON, as an associative array |
+| `input(true, false)` | The same, as an object |
+| `input(false)` | The raw request body |
+| `getParam($key)` / `getParams()` | Query string values |
+| `postParam($key)` / `postParams()` | Form body values |
+| `header($key)` / `headers()` | Request headers |
+| `cookie($key)` / `cookies()` | Cookies |
+| `file($key)` / `files()` | Uploaded files, as PHP's `$_FILES` entries |
+| `ip()` | `REMOTE_ADDR` |
+| `userAgent()` | The User-Agent header |
+
+The single-value getters return `null` when the key is missing, and also when PHP parsed it as an array (`?key[]=1`). `input()` returns `null` when the body is not valid JSON.
+
+## Response
+
+`aapje::response()` returns the response object. Everything except `echo()` can be chained.
+
+```php
+aapje::response()
+    ->statusCode(201)
+    ->header('X-Request-Id', $id)
+    ->cookie('seen', '1', ['expires' => time() + 3600, 'path' => '/'])
+    ->echo(['created' => true]);
+```
+
+`echo()` sends the headers and the body and then ends the script, so nothing after it runs. What it sends depends on what you give it:
+
+| Call | Body |
+| --- | --- |
+| `echo(['a' => 1])` | `{"a":1}` |
+| `echo('hi')` | `{"echo":"hi"}` |
+| `echo('hi', false)` | `hi` |
+| `echo(false)` | `false` |
+| `echo(null)` | empty |
+
+Arrays and objects are always sent as JSON. If the content cannot be encoded, `echo()` throws a `JsonException`.
+
+The `Content-Type` is `application/json` unless you set another one:
+
+```php
+aapje::response()->header('Content-Type', 'text/plain')->echo('hi', false);
+```
+
+`cookie()` takes the same options array as PHP's `setcookie()`. `cookies()` sets several at once from `['name' => ['value' => ..., 'options' => [...]]]`.
+
+## Middleware
+
+Middleware runs on every request, before routing, in the order it was registered. It gets the request and response objects.
+
+```php
+aapje::middleware(function ($request, $response) {
+    if ($request->header('Authorization') !== 'Bearer ' . getenv('API_TOKEN')) {
+        $response->statusCode(401)->echo(['error' => 'Unauthorized']);
+    }
+});
+```
+
+To stop a request, send a response. To limit middleware to part of your API, check `$request->path()`. There is no hook that runs after the route handler, because the handler ends the script when it responds.
+
+## Configuration
+
+All of it is optional.
 
 ```php
 aapje::setConfig([
+    'debug' => false,
     'database' => [
         'host' => 'localhost',
+        'port' => 3306,
         'dbname' => 'your_database',
         'user' => 'your_username',
         'password' => 'your_password',
     ],
     'cors' => [
         'enabled' => true,
-        'origins' => ['https://example.com', 'https://example.org'], // Allowed origins
-        'methods' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Allowed methods
-        'headers' => ['Content-Type', 'Authorization'], // Allowed headers
-        'credentials' => true, // Allow credentials
+        'origins' => ['https://example.com'],
+        'methods' => ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        'headers' => ['Content-Type', 'Authorization'],
+        'credentials' => true,
     ],
     'default_headers' => [
         'X-Powered-By' => 'aapje.php',
@@ -73,206 +170,74 @@ aapje::setConfig([
 ]);
 ```
 
-## 📚 Usage
+`default_headers` are added to every response sent with `echo()`. The database `port` can be left out.
 
-### 1. **Defining Routes**
+### Errors
 
-Define routes using the `route` method, specifying the HTTP method, URL pattern, and callback function.
+An exception or PHP error that you don't catch is written to the PHP error log and answered with a 500 and `{"error":"Internal Server Error"}`. Set `debug` to `true` to get the real message in the response while developing. Leave it off on a public server, because those messages can contain SQL and file paths.
 
-```php
-// Responds to all HTTP methods
-aapje::route('*', '/', function () {
-    aapje::response()->echo(['message' => 'Welcome to aapje.php!']);
-});
+### CORS
 
-// GET route with dynamic parameter
-aapje::route('GET', '/user/@id', function ($id) {
-    $user = aapje::select('users', '*', ['id' => $id]);
-    if ($user) {
-        aapje::response()->echo($user);
-    } else {
-        aapje::response()->statusCode(404)->echo(['error' => 'User not found']);
-    }
-});
-```
+CORS is off by default. If you only set `'enabled' => true`, origins, methods and headers all default to `*`. With a list of origins, the request's `Origin` is echoed back when it is on the list, and `Vary: Origin` is set. Browsers refuse `credentials` together with the `*` origin, so list your origins if you need credentials.
 
-### 2. **Using Middleware**
+CORS is handled before middleware. Preflight `OPTIONS` requests are answered with a 204 without reaching your middleware or routes, and responses sent by middleware carry the CORS headers too.
 
-Register middleware functions to execute custom logic before route handling, such as logging or authentication.
+CORS only tells browsers which sites may read a response. A request from an origin that is not on the list is still handled.
+
+## Database
+
+The database methods use PDO with MySQL. The connection is opened on the first query, so an API that never touches the database never connects.
 
 ```php
-// Define a middleware function
-function loggingMiddleware($request, $response) {
-    $method = $_SERVER['REQUEST_METHOD'];
-    $uri = $_SERVER['REQUEST_URI'];
-    $ip = $request->ip();
-    error_log("[$method] $uri from $ip");
-}
+// Returns the new row's ID
+$id = aapje::insert('users', ['name' => 'Ada', 'email' => 'ada@example.com']);
 
-// Register the middleware
-aapje::middleware('loggingMiddleware');
-```
+// One row, or false if there is none
+$user = aapje::select('users', ['id', 'name', 'email'], ['id' => $id]);
 
-### 3. **Utilizing Helpers**
-
-Use the `Helpers` class for common utility functions like escaping HTML or handling files.
-
-```php
-aapje::route('GET', '/escape', function () {
-    $unsafeString = '<script>alert("XSS")</script>';
-    $safeString = Helpers::esc($unsafeString);
-    aapje::response()->echo(['escaped' => $safeString]);
-});
-```
-
-### 4. **Handling CORS**
-
-CORS settings are managed via the `setConfig` method. When enabled, **aapje.php** automatically sets the necessary headers and handles preflight `OPTIONS` requests.
-
-```php
-aapje::setConfig([
-    'cors' => [
-        'enabled' => true,
-        'origins' => ['https://example.com'], // Allowed origins
-        'methods' => ['GET', 'POST'], // Allowed HTTP methods
-        'headers' => ['Content-Type', 'Authorization'], // Allowed headers
-        'credentials' => true, // Allow credentials
-    ],
+// Many rows
+$users = aapje::selectAll('users', ['id', 'email'], ['active' => 1], [
+    'orderBy' => 'id',
+    'sort' => 'DESC',
+    'limit' => 10,
+    'offset' => 20,
 ]);
 
-// Example route to test CORS
-aapje::route('*', '/cors-test', function () {
-    aapje::response()->echo(['message' => 'CORS is configured properly!']);
-});
+// Both return the number of rows they changed
+aapje::update('users', ['name' => 'Ada L.'], ['id' => $id]);
+aapje::delete('users', ['id' => $id]);
 ```
 
-### 5. **Database Operations**
-
-Perform CRUD operations using built-in methods. Below is an example that demonstrates creating, reading, updating, and deleting a user, along with setting custom headers and handling advanced database queries like sorting and limiting results.
+Conditions are `column = value` pairs joined with `AND`; a `null` value becomes `IS NULL`. Pass `'*'` instead of a column list to select every column. For anything else, write the SQL yourself; `query()` prepares it, binds the parameters and returns the `PDOStatement`:
 
 ```php
-// Create a new user
-aapje::route('POST', '/user', function () {
-    $input = aapje::request()->input();
-    $data = [
-        'name' => $input['name'] ?? null,
-        'email' => $input['email'] ?? null,
-    ];
-
-    if (!$data['name'] || !$data['email']) {
-        aapje::response()->statusCode(400)->echo(['error' => 'Name and email are required']);
-    }
-
-    try {
-        $id = aapje::insert('users', $data);
-        aapje::response()->statusCode(201)->echo(['created_user_id' => $id]);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Failed to create user']);
-    }
-});
-
-// Retrieve all users with sorting and limit
-aapje::route('GET', '/users', function () {
-    $users = aapje::selectAll('users', '*', [], [
-        'orderBy' => 'name',
-        'sort' => 'ASC',
-        'limit' => 10
-    ]);
-    aapje::response()->header('X-Custom-Header', 'CustomValue')->echo($users);
-});
-
-// Update a user
-aapje::route('PUT', '/user/@id', function ($id) {
-    $input = aapje::request()->input();
-    $data = [
-        'name' => $input['name'] ?? null,
-        'email' => $input['email'] ?? null,
-    ];
-
-    if (!$data['name'] && !$data['email']) {
-        aapje::response()->statusCode(400)->echo(['error' => 'At least one of name or email is required']);
-    }
-
-    try {
-        aapje::update('users', $data, ['id' => $id]);
-        aapje::response()->echo(['message' => 'User updated successfully']);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Failed to update user']);
-    }
-});
-
-// Delete a user
-aapje::route('DELETE', '/user/@id', function ($id) {
-    try {
-        aapje::delete('users', ['id' => $id]);
-        aapje::response()->echo(['message' => 'User deleted successfully']);
-    } catch (Exception $e) {
-        aapje::response()->statusCode(500)->echo(['error' => 'Failed to delete user']);
-    }
-});
+$rows = aapje::query(
+    'SELECT * FROM users WHERE created_at > ? OR role = ?',
+    [$since, 'admin']
+)->fetchAll();
 ```
 
-For more comprehensive examples, refer to the [`examples.php`](https://github.com/ssl/aapje.php/blob/main/examples.php) file in the repository.
+Things to know:
 
-## 🔧 API Reference
+- Values are always bound as parameters. Table and column names may only contain `a-z`, `A-Z`, `0-9`, `_` and `-`, and are quoted with backticks. That check is about syntax: it does not decide which columns a client may use, so don't pass request data as column names or as `orderBy` without your own list of allowed names.
+- `update()` and `delete()` refuse to run without conditions. To change every row on purpose, pass `true` as the last argument: `aapje::delete('sessions', [], true)`.
+- `update()` returns the number of rows that actually changed, which is 0 when the new values equal the old ones.
+- `limit` and `offset` take whole numbers. `offset` needs a `limit`.
+- Arrays are not accepted as values.
+- Database errors are thrown as `PDOException`. See [Errors](#errors) for what happens when you don't catch them.
 
-### **aapje Class**
+## Helpers
 
-- **`setConfig(array $config)`**
+- `Helpers::esc($string)` escapes HTML special characters.
+- `Helpers::getFile($path)` reads a file.
+- `Helpers::putFile($path, $content)` writes a file.
 
-  Set global configuration options.
+`getFile()` and `putFile()` throw an `Exception` when the file cannot be read or written.
 
-- **`route(string $method, string $pattern, callable $callback)`**
+## Examples
 
-  Define a new route.
+[`examples.php`](https://github.com/ssl/aapje.php/blob/main/examples.php) has a longer API with users, pagination, raw queries, file uploads, cookies and different content types.
 
-- **`middleware(callable $callback)`**
+## License
 
-  Register a middleware function.
-
-- **`run()`**
-
-  Start processing incoming requests.
-
-- **Database Methods:**
-
-  - **`insert(string $table, array $data)`**: Insert a new record.
-  - **`update(string $table, array $data, array $conditions = [])`**: Update existing records.
-  - **`delete(string $table, array $conditions = [])`**: Delete records.
-  - **`select(string $table, $columns = '*', array $conditions = [], array $options = [])`**: Select a single record.
-  - **`selectAll(string $table, $columns = '*', array $conditions = [], array $options = [])`**: Select multiple records.
-
-### **Request Class**
-
-- **`header(string $key): ?string`**: Retrieve a specific request header.
-- **`headers(): array`**: Get all request headers.
-- **`input(bool $decode = true, bool $associative = true)`**: Get JSON input from the request body.
-- **`getParam(string $key): ?string`**: Retrieve a specific GET parameter.
-- **`getParams(): array`**: Get all GET parameters.
-- **`postParam(string $key): ?string`**: Retrieve a specific POST parameter.
-- **`postParams(): array`**: Get all POST parameters.
-- **`ip(): string`**: Get the client's IP address.
-- **`userAgent(): ?string`**: Get the client's User-Agent.
-
-### **Response Class**
-
-- **`header(string $key, string $value): self`**: Set a response header.
-- **`headers(array $headers): self`**: Set multiple response headers.
-- **`cookie(string $name, string $value, array $options = []): self`**: Set a cookie.
-- **`cookies(array $cookies): self`**: Set multiple cookies.
-- **`statusCode(int $code): self`**: Set the HTTP status code.
-- **`echo($content, bool $json = true)`**: Send the response to the client.
-
-### **Helpers Class**
-
-- **`esc(string $string): string`**: Escape HTML special characters.
-- **`getFile(string $file): string`**: Get the contents of a file.
-- **`putFile(string $file, string $content): void`**: Write content to a file.
-
-## 📄 License
-
-**aapje.php** is open-source software licensed under the [MIT License](https://github.com/ssl/aapje.php/blob/main/license.txt).
-
----
-
-Feel free to contribute to **aapje.php** by submitting issues or pull requests.
+MIT, see [`license.txt`](https://github.com/ssl/aapje.php/blob/main/license.txt).
